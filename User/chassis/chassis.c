@@ -88,6 +88,7 @@ static void request_id(Chassis *c)
 }
 ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)
 {
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (!stopped(c)) return reject(c,CHASSIS_NOT_READY,CHASSIS_STOP_UNCONFIRMED);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,0u);
@@ -100,6 +101,7 @@ ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)
 static ChassisRequestResult motion_ready(Chassis *c, uint32_t now, uint8_t closed)
 {
     ChassisReason why;
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (c->data.sequence_active || (c->data.state!=CHASSIS_READY &&
         c->data.state!=CHASSIS_VELOCITY)) return reject(c,
             Chassis_OwnsWheels(c) ? CHASSIS_BUSY : CHASSIS_NOT_READY,CHASSIS_AXIS_BUSY);
@@ -184,6 +186,7 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle, float limit
 ChassisRequestResult Chassis_StartAcceptance(Chassis *c, uint32_t now)
 {
     ChassisRequestResult r;
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,1u);
     if (c->data.config_issues) return reject(c,CHASSIS_INVALID,CHASSIS_CONFIG);

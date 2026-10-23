@@ -34,6 +34,7 @@ typedef struct {
 } ChassisSnapshot;
 typedef struct {
     MotorBus *bus;
+    const uint8_t *external_busy; /* mechanism producer owns motion during bench sequences */
     ChassisConfig config;
     ChassisSnapshot data;
     ChassisOdometry odometry;

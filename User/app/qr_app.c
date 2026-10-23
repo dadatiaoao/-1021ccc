@@ -11,6 +11,7 @@
 #include "./usart/bsp_qr_trigger.h"
 #include "./usart/bsp_motor_uart.h"
 #include "./motor/motor_test_config.h"
+#include "./mechanism/bsp_limit_gpio.h"
 #include <string.h>
 
 /* Explicit manual requests share the existing bus. STOP cancels chassis intent
@@ -19,7 +20,16 @@ static void manual_action(QrApp *a, QrUiAction action, uint32_t now)
 {
     uint8_t address = (uint8_t)(a->ui.selected + 1u);
     int owns=Chassis_OwnsWheels(&a->chassis);
-    if (action==QR_UI_STOP_ALL || action==QR_UI_STOP_WHEELS ||
+    if (action==QR_UI_STOP_ALL || action==QR_UI_STOP_WHEELS || action==QR_UI_STOP_AXIS ||
+        (action==QR_UI_MODE && a->motor.manual)) Mechanism_Stop(&a->mechanism,now);
+    else if (Mechanism_OwnsAxes(&a->mechanism) && (action==QR_UI_MODE || action==QR_UI_RUN)) {
+        a->motor.message="MECHANISM BUSY"; return;
+    }
+    /* Raw RPM/pulse templates cannot bypass calibration, reference or limits. */
+    if (action==QR_UI_RUN && address>=5u && a->ui.test_action<=2u) {
+        a->motor.message="USE MECH: CONFIGURE + HOME/TEST"; return;
+    }
+    if (action==QR_UI_STOP_ALL || action==QR_UI_STOP_WHEELS || (action==QR_UI_MODE && a->motor.manual) ||
         (action==QR_UI_STOP_AXIS && address<=4u)) Chassis_Stop(&a->chassis,now);
     else if (owns && (action==QR_UI_MODE || (action==QR_UI_RUN &&
         (address<=4u || a->ui.test_action>=3u)))) {
@@ -79,7 +89,7 @@ static void manual_action(QrApp *a, QrUiAction action, uint32_t now)
     }
 }
 
-/* Initialization starts diagnostics only; motion always requires explicit intent. */
+/* Calibration confirmations gate the one-shot power-on mechanism home. */
 void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
 {
     MotorBus_Init(&a->motor, motor, now);
@@ -88,6 +98,11 @@ void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
     Gyro_Init(&a->gyro, BspGyroBus_Io(), now);
     Chassis_Init(&a->chassis,&a->motor,0,now);
     a->ui.chassis=&a->chassis;
+    BspLimit_Init();
+    Mechanism_Init(&a->mechanism,&a->motor,0,now);
+    a->mechanism.chassis=&a->chassis;
+    a->chassis.external_busy=&a->mechanism.owned;
+    a->ui.mechanism=&a->mechanism;
 }
 /*
  * 给陀螺校准提供拒绝原因：活动、未知、未确认停止或无已知阻碍。
@@ -98,7 +113,7 @@ static uint8_t motor_active(const QrApp *a, uint32_t now)
 {
     unsigned i;
     uint8_t condition = GYRO_MOTOR_NONE;
-    if (Chassis_OwnsWheels(&a->chassis) || a->motor.queue_count || a->motor.wheels_pending ||
+    if (Mechanism_OwnsAxes(&a->mechanism) || Chassis_OwnsWheels(&a->chassis) || a->motor.queue_count || a->motor.wheels_pending ||
         a->motor.sync_state==MOTOR_SYNC_PREPARE || a->motor.sync_state==MOTOR_SYNC_TRIGGER ||
         a->motor.sync_state==MOTOR_SYNC_VERIFY) condition = GYRO_MOTOR_ACTIVE;
     for (i=0u;i<MOTOR_COUNT;++i) {
@@ -131,6 +146,9 @@ void QrApp_Process(QrApp *a, uint32_t now)
     uint8_t down;
     QrUiAction action;
     BspMotorUart_PumpBus(&a->motor, now);
+    now=AppClock_Now();
+    Mechanism_SampleLimits(&a->mechanism,BspLimit_Read(0u),BspLimit_Read(1u),now);
+    Mechanism_Process(&a->mechanism,now); /* limits/STOP before selecting next UART5 transaction */
     MotorBus_Process(&a->motor, now);
     now = AppClock_Now(); Gyro_Process(&a->gyro, now, motor_active(a, now));
     AppTouch_Process(now); AppTouch_GetState(&x, &y, &down);
@@ -139,9 +157,12 @@ void QrApp_Process(QrApp *a, uint32_t now)
     if (action == QR_UI_RESCAN)
         BspQrUart_BeginSession(&a->qr, now);
     else if (action==QR_UI_CHASSIS_START) (void)Chassis_StartAcceptance(&a->chassis,now);
+    else if (action==QR_UI_MECH_HOME) (void)Mechanism_HomeAll(&a->mechanism,now);
+    else if (action==QR_UI_MECH_TEST) (void)Mechanism_StartAcceptance(&a->mechanism,now);
     else if ((action==QR_UI_GYRO_CAL || action==QR_UI_GYRO_ZERO) &&
-        Chassis_OwnsWheels(&a->chassis)) {
-        a->motor.message="CHASSIS BUSY"; a->chassis.data.rejection=CHASSIS_AXIS_BUSY;
+        (Chassis_OwnsWheels(&a->chassis) || Mechanism_OwnsAxes(&a->mechanism))) {
+        a->motor.message=Mechanism_OwnsAxes(&a->mechanism) ? "MECHANISM BUSY" : "CHASSIS BUSY";
+        a->chassis.data.rejection=CHASSIS_AXIS_BUSY;
     }
     else if (action == QR_UI_FLOW_CLEAR) Flow_ResetTotals(&a->flow);
     else if (action == QR_UI_GYRO_CAL) {

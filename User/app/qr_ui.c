@@ -5,6 +5,7 @@
  */
 #include "qr_ui.h"
 #include "./chassis/chassis_ui.h"
+#include "./mechanism/mechanism_ui.h"
 #include "./flow/flow_ui.h"
 #include "./gyro/gyro_ui.h"
 #include "./lcd/bsp_lcd.h"
@@ -44,7 +45,9 @@ QrUiAction QrUi_Touch(QrUi *u, int32_t x, int32_t y, uint8_t down)
         u->redraw = 1u; return QR_UI_NONE;
     }
     if (u->motor_page && !u->flow_page && !u->gyro_page && x<304 && y>=4 && y<28) {
-        if (u->chassis_page) u->chassis_detail=(uint8_t)!u->chassis_detail;
+        if (u->mechanism_page) u->mechanism_detail=(uint8_t)((u->mechanism_detail+1u)%4u);
+        else if (u->detail && u->selected>=4u) { u->mechanism_page=1u; u->mechanism_detail=0u; }
+        else if (u->chassis_page) u->chassis_detail=(uint8_t)!u->chassis_detail;
         else if (!u->detail) { u->chassis_page=1u; u->chassis_detail=0u; }
         u->redraw=1u; return QR_UI_NONE;
     }
@@ -52,6 +55,7 @@ QrUiAction QrUi_Touch(QrUi *u, int32_t x, int32_t y, uint8_t down)
         if (x >= 248) {
             if (u->gyro_page) u->gyro_page=0u;
             else if (u->flow_page) u->flow_page = 0u;
+            else if (u->mechanism_page) u->mechanism_page=0u;
             else if (u->chassis_page) u->chassis_page=0u;
             else u->motor_page = (uint8_t)!u->motor_page;
             u->redraw = 1u;
@@ -59,8 +63,9 @@ QrUiAction QrUi_Touch(QrUi *u, int32_t x, int32_t y, uint8_t down)
         else if (x >= 160 && x < 240) return QR_UI_STOP_ALL;
         else if (x < 152) { if (u->motor_page && !u->flow_page && !u->gyro_page) u->redraw = 1u;
             return u->gyro_page ? (x<88 ? QR_UI_GYRO_CAL : QR_UI_GYRO_ZERO) :
+            (!u->flow_page && u->mechanism_page) ? (x<88 ? QR_UI_MECH_HOME : QR_UI_MECH_TEST) :
             (u->flow_page ? QR_UI_FLOW_CLEAR : (u->chassis_page ? QR_UI_CHASSIS_START : u->motor_page ? QR_UI_MODE : QR_UI_RESCAN)); }
-    } else if (u->motor_page && !u->chassis_page && !u->flow_page && !u->gyro_page) {
+    } else if (u->motor_page && !u->mechanism_page && !u->chassis_page && !u->flow_page && !u->gyro_page) {
         if (!u->detail) {
             unsigned i;
             for (i = 1u; i <= 7u; ++i) if (y >= row_y[i] && y < row_y[i] + 18) {
@@ -130,6 +135,7 @@ static void motor_page(QrUi *u, const MotorBus *b, uint32_t now)
     const MotorSnapshot *d = &n->data;
     unsigned i;
     line(u, 0u, u->detail ? (b->manual ? "MOTOR MANUAL / STOP READY" : "MOTOR READ ONLY") : "CHASSIS [tap] / MOTOR");
+    if (u->detail && u->selected>=4u) line(u,0u,"MECH [tap] / MOTOR");
     if (!u->detail) {
         for (i = 0u; i < MOTOR_COUNT; ++i) {
             n = &b->nodes[i]; d = &n->data;
@@ -168,7 +174,7 @@ static void motor_page(QrUi *u, const MotorBus *b, uint32_t now)
    may exceed this target; the gyro still detects and invalidates that gap.
    No service is called here: all modules resume in the common app loop. */
 enum { DRAW_IDLE, DRAW_CLEAR, DRAW_ROWS, DRAW_TEXT, DRAW_BUTTONS, DRAW_LABELS };
-enum { JOB_MOTOR=1, JOB_FLOW=2, JOB_GYRO=4, JOB_DETAIL=8, JOB_MANUAL=16, JOB_CHASSIS=32 };
+enum { JOB_MOTOR=1, JOB_FLOW=2, JOB_GYRO=4, JOB_DETAIL=8, JOB_MANUAL=16, JOB_CHASSIS=32, JOB_MECH=64 };
 /*
  * 一次最多绘制两个字符，offset 记录进度，下轮继续同一行或按钮标签。
  */
@@ -229,9 +235,10 @@ static void draw_step(QrUi *u)
         switch (u->button) {
         case 0u: label="STOP"; break;
         case 1u: label=(f & JOB_GYRO) ? "CAL" : (f & JOB_FLOW) ? "CLEAR" :
+            (f & JOB_MECH) ? "HOME" :
             (f & JOB_CHASSIS) ? "START" : (f & JOB_MOTOR) ? ((f & JOB_MANUAL) ? "READ ONLY" : "MANUAL") : "RESCAN"; break;
-        case 2u: label=(f & JOB_GYRO) ? "ZERO" : ""; break;
-        case 3u: label=(f & (JOB_FLOW|JOB_GYRO|JOB_CHASSIS)) ? "BACK" : (f & JOB_MOTOR) ? "QR" : "MOTOR"; break;
+        case 2u: label=(f & JOB_GYRO) ? "ZERO" : (f & JOB_MECH) ? "TEST" : ""; break;
+        case 3u: label=(f & (JOB_FLOW|JOB_GYRO|JOB_CHASSIS|JOB_MECH)) ? "BACK" : (f & JOB_MOTOR) ? "QR" : "MOTOR"; break;
         case 4u: label="GYRO"; break;
         default: label=(f & (JOB_FLOW|JOB_GYRO)) ? ((f & JOB_DETAIL) ? "DATA" : "MORE") : "FLOW"; break;
         }
@@ -260,6 +267,7 @@ void QrUi_Process(QrUi *u, const QrService *s, const MotorBus *motor, const Flow
         u->redraw=0u; u->last_draw=now;
         u->job_flags=(uint8_t)((u->motor_page ? JOB_MOTOR : 0u) | (u->flow_page ? JOB_FLOW : 0u) |
             (u->gyro_page ? JOB_GYRO : 0u) | (u->chassis_page ? JOB_CHASSIS : 0u) | (motor->manual ? JOB_MANUAL : 0u) |
+            (u->mechanism_page ? JOB_MECH : 0u) |
             ((u->gyro_page ? u->gyro_detail : u->flow_detail) ? JOB_DETAIL : 0u));
         if (u->gyro_page || u->flow_page) {
             unsigned i; char t[43];
@@ -268,6 +276,9 @@ void QrUi_Process(QrUi *u, const QrService *s, const MotorBus *motor, const Flow
                 else FlowUi_Line(t,i,u->flow_detail,flow);
                 line(u,i,t);
             }
+        } else if (u->mechanism_page && u->mechanism) {
+            unsigned i; char t[43];
+            for (i=0u;i<9u;++i) { MechanismUi_Line(t,i,u->mechanism_detail,u->mechanism,now); line(u,i,t); }
         } else if (u->chassis_page && u->chassis) {
             unsigned i; char t[43];
             for (i=0u;i<9u;++i) { ChassisUi_Line(t,i,u->chassis_detail,u->chassis,now); line(u,i,t); }

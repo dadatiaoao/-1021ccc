@@ -12,11 +12,13 @@ extern USART_TypeDef fake_usart1, fake_usart3, fake_uart5;
 extern DMA_Stream_TypeDef fake_stream1;
 extern DMA_Stream_TypeDef fake_stream0, fake_stream7;
 extern GPIO_TypeDef fake_gpiob;
+extern GPIO_TypeDef fake_gpiog;
 extern GPIO_TypeDef fake_gpioc, fake_gpiod;
 #define USART1 (&fake_usart1)
 #define USART3 (&fake_usart3)
 #define UART5 (&fake_uart5)
 #define GPIOB (&fake_gpiob)
+#define GPIOG (&fake_gpiog)
 #define GPIOC (&fake_gpioc)
 #define GPIOD (&fake_gpiod)
 #define DMA1_Stream1 (&fake_stream1)
@@ -56,6 +58,8 @@ typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
 #define GPIO_PIN_11 (1u << 11)
 #define GPIO_PIN_12 (1u << 12)
 #define GPIO_PIN_2 (1u << 2)
+#define GPIO_PIN_3 (1u << 3)
+#define GPIO_MODE_INPUT 0u
 #define GPIO_MODE_AF_PP 2u
 #define GPIO_MODE_OUTPUT_PP 1u
 #define GPIO_PULLUP 1u
@@ -92,6 +96,7 @@ typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
 #define __HAL_RCC_GPIOD_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_USART3_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_GPIOB_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_GPIOG_CLK_ENABLE() ((void)0)
 #define __HAL_RCC_DMA1_CLK_ENABLE() ((void)0)
 #define __HAL_DMA_GET_COUNTER(d) ((d)->Instance->count)
 #define __HAL_LINKDMA(u,field,d) do { (u)->field = &(d); (d).Parent = (u); } while (0)
@@ -116,6 +121,7 @@ HAL_StatusTypeDef HAL_DMA_Init(DMA_HandleTypeDef *d);
 HAL_StatusTypeDef HAL_DMA_DeInit(DMA_HandleTypeDef *d);
 HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *d);
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *gpio);
+uint32_t HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin);
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint16_t pin, uint32_t state);
 void HAL_NVIC_SetPriority(unsigned irq, unsigned preempt, unsigned sub);
 void HAL_NVIC_EnableIRQ(unsigned irq);

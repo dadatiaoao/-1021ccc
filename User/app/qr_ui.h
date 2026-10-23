@@ -9,9 +9,11 @@
 #include "./flow/flow_service.h"
 #include "./gyro/gyro_service.h"
 #include "./chassis/chassis.h"
+#include "./mechanism/mechanism.h"
 typedef enum { QR_UI_NONE, QR_UI_RESCAN, QR_UI_MODE, QR_UI_RUN,
                QR_UI_STOP_AXIS, QR_UI_STOP_WHEELS, QR_UI_STOP_ALL, QR_UI_FLOW_CLEAR,
-               QR_UI_GYRO_CAL, QR_UI_GYRO_ZERO, QR_UI_CHASSIS_START } QrUiAction;
+               QR_UI_GYRO_CAL, QR_UI_GYRO_ZERO, QR_UI_CHASSIS_START,
+               QR_UI_MECH_HOME, QR_UI_MECH_TEST } QrUiAction;
 typedef struct {
     char previous[9][43];
     char target[9][43]; /* one coherent refresh snapshot, frozen until painted */
@@ -19,6 +21,8 @@ typedef struct {
     uint16_t clear_y;
     uint8_t drawing, row, offset, strip, button, job_flags;
     const Chassis *chassis;
+    const Mechanism *mechanism;
+    uint8_t mechanism_page, mechanism_detail;
     uint8_t chassis_page, chassis_detail;
     uint8_t flow_page, flow_detail;
     uint8_t gyro_page, gyro_detail;

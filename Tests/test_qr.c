@@ -120,6 +120,10 @@ static void test_stream_sessions(void)
 USART_TypeDef fake_usart1, fake_usart3, fake_uart5;
 DMA_Stream_TypeDef fake_stream1;
 GPIO_TypeDef fake_gpiob;
+GPIO_TypeDef fake_gpiog;
+static uint8_t limit_levels[2];
+uint32_t HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)
+{ CHECK(port==GPIOG && (pin==GPIO_PIN_2 || pin==GPIO_PIN_3)); return limit_levels[pin==GPIO_PIN_2 ? 0u : 1u]; }
 static UART_HandleTypeDef *uart;
 static uint8_t *dma_memory;
 static uint16_t dma_size;
@@ -154,6 +158,9 @@ HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *d) { d->State=HAL_DMA_STATE_R
 HAL_StatusTypeDef HAL_DMA_DeInit(DMA_HandleTypeDef *d) { d->State=HAL_DMA_STATE_READY; return HAL_OK; }
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *g)
 {
+    if (port==GPIOG) {
+        CHECK(g->Pin==(GPIO_PIN_2|GPIO_PIN_3) && g->Mode==GPIO_MODE_INPUT && g->Pull==GPIO_PULLUP); return;
+    }
     if (g->Pin == (GPIO_PIN_10 | GPIO_PIN_11)) {
         CHECK(port==GPIOB && g->Mode==GPIO_MODE_AF_PP && g->Alternate==GPIO_AF7_USART3);
         ++gpio_checked;
@@ -429,18 +436,18 @@ static void test_seven_ui(void)
     save_image("motor_seven_wait.pgm");
     click(&a,20,140,30002u); CHECK(a.ui.detail && a.ui.selected==4u);
     CHECK(strstr(lines[2],"--"));
-    click(&a,20,245,30004u); CHECK(a.motor.manual && strstr(lines[0],"MANUAL"));
-    CHECK(!strcmp(lines[0],"MOTOR MANUAL / STOP READY"));
+    click(&a,20,245,30004u); CHECK(a.motor.manual);
+    CHECK(!strcmp(lines[0],"MECH [tap] / MOTOR"));
     click(&a,20,140,30006u); CHECK(a.ui.test_action==1u);
     click(&a,20,184,30008u);
     CHECK(motion_sends==before);
 #if MOTOR_TEST_CONFIGURED
-    CHECK(strstr(a.motor.message,"NEED"));
+    CHECK(strstr(a.motor.message,"USE MECH"));
 #elif MOTOR_BENCH_JOG_ENABLED
-    /* Bench jog reaches Submit but still requires healthy feedback. */
-    CHECK(strstr(a.motor.message,"NEED"));
+    /* Mechanism axes cannot bypass the service through a bench jog. */
+    CHECK(strstr(a.motor.message,"USE MECH"));
 #else
-    CHECK(strstr(a.motor.message,"CONFIGURE"));
+    CHECK(strstr(a.motor.message,"USE MECH"));
 #endif
     /* UI edge detection applies equally to one-shot position and group actions. */
     a.ui.test_action=2u;
@@ -492,11 +499,11 @@ static void test_configured_actions(void)
     manual_fixture(&a,40000u,2u,4u); before=app_commands[EMM_MOVE];
     touch_x=20; touch_y=184; touch_down=1u;
     for(now=40000u;now<40040u;++now) app_step(&a,now);
-    CHECK(app_commands[EMM_MOVE]==before+1u && app_last[0]==5u && app_last[10]==2u);
+    CHECK(app_commands[EMM_MOVE]==before && strstr(a.motor.message,"USE MECH"));
     touch_down=0u; app_step(&a,40040u);
     manual_fixture(&a,41000u,1u,6u); before=app_commands[EMM_VELOCITY];
     click(&a,20,184,41000u);
-    CHECK(app_commands[EMM_VELOCITY]==before+1u && app_last[0]==7u && app_length==8u);
+    CHECK(app_commands[EMM_VELOCITY]==before && strstr(a.motor.message,"USE MECH"));
     manual_fixture(&a,42000u,3u,0u); before=app_commands[EMM_MULTI];
     click(&a,20,184,42000u);
     CHECK(app_commands[EMM_MULTI]==before+1u && app_length==37u && app_last[3]==37u);
@@ -870,6 +877,63 @@ static void test_chassis_no_flow(void)
     FlowTest_Fail(0u);
     puts("PASS: actual QrApp/flow failure before START and CLEAR during move do not affect chassis; STOP preserved");
 }
+static void test_mechanism_screen(void)
+{
+    QrApp a; MechanismConfig c; uint32_t id,start,stop_at; unsigned i,before;
+    CHECK(BspQrUart_Init()); app_fixture(&a,500000u); app_motor.online=MOTOR_ALL;
+    review_advance(&a,2500u); review_press(&a,300,245); review_press(&a,20,140);
+    CHECK(a.ui.detail && a.ui.selected==4u); review_press(&a,20,14);
+    CHECK(a.ui.mechanism_page); review_advance(&a,1000u);
+    CHECK(strstr(lines[0],"MECH") && strstr(lines[8],"CONFIG REQUIRED"));
+    id=a.mechanism.data.request_id; review_press(&a,20,245); review_press(&a,108,245);
+    CHECK(a.mechanism.data.request_id==id && !app_motor.count);
+    limit_levels[0]=1u; review_advance(&a,500u);
+    CHECK(a.mechanism.data.limit[0].stable && !a.mechanism.data.limit[1].stable && strstr(lines[6],"PG2:1/HIGH"));
+    save_image("mechanism_config_nc.pgm");
+    limit_levels[0]=0u; limit_levels[1]=1u; review_advance(&a,500u);
+    CHECK(!a.mechanism.data.limit[0].stable && a.mechanism.data.limit[1].stable);
+    limit_levels[1]=0u; review_advance(&a,30u);
+    for (i=0u;i<4u;++i) { review_press(&a,20,14); review_advance(&a,500u); CHECK(!bad_layout); }
+    /* Synthetic calibration ONLY, for live app/STOP ordering and producer gates. */
+    Mechanism_DefaultConfig(&c);
+    for (i=0u;i<3u;++i) {
+        c.axis[i].units_per_rev=10.0; c.axis[i].pulses_per_rev=3200u; c.axis[i].positive_sign=1;
+        c.axis[i].calibrated=1u; c.axis[i].max_rpm=100.0f; c.axis[i].move_speed=2.0f;
+        c.axis[i].tolerance=0.1f;
+    }
+    for (i=0u;i<2u;++i) {
+        c.home[i].max_position=100.0f; c.home[i].initial_release=2.0f; c.home[i].fast_seek=3.0f;
+        c.home[i].backoff=c.home[i].clearance=1.0f; c.home[i].slow_seek=2.0f;
+        c.home[i].wiring_confirmed=c.home[i].home_confirmed=1u;
+    }
+    c.outside_angle=20.0f; c.top_window=0.1f; c.work_window=0.5f;
+    Mechanism_Init(&a.mechanism,&a.motor,&c,tick); a.mechanism.chassis=&a.chassis;
+    start=tick; lcd_timed=1u; lcd_max_step=0u;
+    while (tick-start<2500u && !(a.mechanism.data.state==MECH_FAST_SEEK && a.mechanism.segment==1u)) {
+        inject("156+123+516+231\r",tick,1); review_advance(&a,1u);
+    }
+    if (a.mechanism.data.state!=MECH_FAST_SEEK) fprintf(stderr,"APP MECH: %s %s reject:%s cfg:%u/%u/%u n:%s online:%u flags:%u\n",
+        Mechanism_StateName(a.mechanism.data.state),Mechanism_ReasonName(a.mechanism.data.reason),
+        Mechanism_ReasonName(a.mechanism.data.rejection),a.mechanism.data.config_issues[0],a.mechanism.data.config_issues[1],
+        a.mechanism.data.config_issues[2],MotorBus_ActionName(a.motor.nodes[5].action),a.motor.nodes[5].data.online,a.motor.nodes[5].data.status_flags);
+    CHECK(a.mechanism.data.state==MECH_FAST_SEEK && a.mechanism.owned);
+    id=a.mechanism.data.request_id; review_press(&a,20,245); review_press(&a,108,245);
+    CHECK(a.mechanism.data.request_id==id && a.mechanism.data.rejection==MECH_AXIS_BUSY);
+    CHECK(Chassis_Prepare(&a.chassis,tick)==CHASSIS_BUSY);
+    /* Visit diagnostics while the producer remains active. */
+    review_press(&a,420,14); review_advance(&a,100u); CHECK(a.mechanism.owned && a.flow.data.valid);
+    before=app_motor.count; stop_at=tick; limit_levels[1]=1u;
+    review_advance(&a,40u);
+    CHECK(app_motor.count>before && app_motor.code[before]==EMM_STOP && app_motor.address[before]==6u);
+    CHECK(app_motor.at[before]-stop_at<=15u && a.mechanism.data.trigger_ms>=stop_at);
+    CHECK(a.qr.data.valid && a.flow.data.valid && lcd_max_step<=2u && a.mechanism.data.max_sample_gap_ms<=10u);
+    review_press(&a,300,245); review_press(&a,170,245);
+    CHECK(a.mechanism.data.result==MECH_CANCELLED && !a.mechanism.auto_pending && !a.chassis.data.sequence_active);
+    limit_levels[1]=0u; lcd_timed=0u; review_advance(&a,1000u);
+    a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,0,0,tick);
+    CHECK(!bad_layout); save_image("mechanism_cancelled.pgm");
+    puts("PASS: mechanism NC/config/detail screen, one-shot HOME/TEST, boot producer/peer arbitration, parallel QR/flow/UI, raw limit STOP before bus");
+}
 static void test_chassis_active(void)
 {
     QrApp a; ChassisConfig cfg; uint32_t start,next_command,next_scan,cleared,zeros,requests;
@@ -924,6 +988,7 @@ int main(int argc,char **argv)
     if(argc>1 && !strcmp(argv[1],"review-ui")) { test_review_ui(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-gate")) { test_review_gate(); return 0; }
     if(argc>1 && !strcmp(argv[1],"chassis-screen")) { test_chassis_screen(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"mechanism-screen")) { test_mechanism_screen(); return 0; }
     if(argc>1) {
         QrService s;
         if(!strcmp(argv[1],"init")) init_fail=1;
