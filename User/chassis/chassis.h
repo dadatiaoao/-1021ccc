@@ -13,6 +13,13 @@ typedef enum { CHASSIS_OK, CHASSIS_CONFIG, CHASSIS_FEEDBACK, CHASSIS_MOTOR_FAULT
     CHASSIS_ACTION_TIMEOUT, CHASSIS_STOP_TIMEOUT, CHASSIS_FINAL_ERROR, CHASSIS_BAD_REQUEST,
     CHASSIS_BUS_REJECTED } ChassisReason;
 typedef struct {
+    ChassisOdometryIssue issue;
+    FlowError flow_error;
+    uint32_t at_ms, flow_age_ms, paired_age_ms;
+    uint32_t rejected, gaps, segments, clears;
+    uint8_t valid, quality;
+} ChassisFault;
+typedef struct {
     ChassisState state;
     ChassisResult result;
     ChassisReason reason, rejection;
@@ -25,6 +32,7 @@ typedef struct {
     uint32_t request_id, config_issues, publish_accepted, publish_rejected;
     uint32_t submitted_frames, last_submit_ms, max_submit_gap_ms, feedback_age_ms;
     uint8_t sequence_active, stage, done, pose_valid, gyro_valid, flow_valid, stop_pending;
+    ChassisFault fault; /* first failure evidence; live recovery never clears it */
 } ChassisSnapshot;
 typedef struct {
     MotorBus *bus;

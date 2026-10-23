@@ -57,6 +57,17 @@ static void begin_stop(Chassis *c, ChassisResult result, ChassisReason why, uint
         (c->data.state==CHASSIS_STOPPING && c->stop_result==CHASSIS_FAILED)) {
         result=CHASSIS_FAILED; why=c->data.reason;
     }
+    if (result==CHASSIS_FAILED && !c->data.fault.valid) {
+        ChassisFault *fault=&c->data.fault;
+        fault->valid=1u; fault->at_ms=now;
+        if (why==CHASSIS_FLOW_INVALID) {
+            const ChassisOdometry *o=&c->odometry;
+            fault->issue=o->last_issue; fault->flow_error=o->break_flow_error;
+            fault->flow_age_ms=o->break_flow_age_ms; fault->paired_age_ms=o->break_paired_age_ms;
+            fault->quality=o->break_quality; fault->rejected=o->break_rejected;
+            fault->gaps=o->break_gaps; fault->segments=o->break_segments; fault->clears=o->break_clears;
+        }
+    }
     c->data.sequence_active=(uint8_t)(result==CHASSIS_SUCCESS && c->data.sequence_active);
     c->between=0u; c->data.done=0u;
     if (c->data.state==CHASSIS_STOPPING) {
@@ -74,6 +85,7 @@ void Chassis_Stop(Chassis *c, uint32_t now)
 static void request_id(Chassis *c)
 {
     if (!++c->data.request_id) ++c->data.request_id;
+    memset(&c->data.fault,0,sizeof(c->data.fault));
     c->data.rejection=CHASSIS_OK; c->data.reason=CHASSIS_OK; c->data.done=0u;
 }
 ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)

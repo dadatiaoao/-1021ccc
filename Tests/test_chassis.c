@@ -181,7 +181,11 @@ static void kinematics(void)
     v.vx=-5; CHECK(Chassis_Solve(&c,v,&w)); CHECK(w.quantized[0]==-1 && w.quantized[1]==1);
     v.vx=(float)NAN; CHECK(!Chassis_Solve(&c,v,&w)); v.vx=(float)INFINITY; CHECK(!Chassis_Solve(&c,v,&w));
     c.wheel_diameter_mm=0; v.vx=1; CHECK(!Chassis_Solve(&c,v,&w));
-    Chassis_DefaultConfig(&c); CHECK(Chassis_ConfigIssues(&c,1u)==55u);
+    /* Invalid-config fixture is independent of the user's measured build config. */
+    Chassis_DefaultConfig(&c); c.mechanical_confirmed=c.feedback_confirmed=0u;
+    c.wheel_diameter_mm=c.length_mm=c.width_mm=c.gear_ratio=0.0f;
+    memset(c.motor_sign,0,sizeof(c.motor_sign)); c.flow_x_mm_count=c.flow_y_mm_count=0.0f;
+    CHECK(Chassis_ConfigIssues(&c,1u)==55u);
     puts("PASS: X kinematics, units/gearing/signs, proportional limits, quantization, invalid config/NaN/Inf");
 }
 static void velocity_tests(void)
@@ -273,6 +277,72 @@ static void odometry_tests(void)
     g.sample_ms=320u; ++g.sequence;
     Chassis_OdometryProcess(&o,&c,&f,&g,320u); CHECK(!o.valid && o.generation!=generation);
     puts("PASS: odometry scale, bracket interpolation/wait, dedup/cumulative counts, resets, offset rotation/360 crossing");
+}
+static void alignment_phase_test(void)
+{
+    ChassisConfig c=config(); ChassisOdometry o; GyroSnapshot g; FlowSnapshot f;
+    unsigned i,phase,wrap;
+    c.flow_mount_deg=c.flow_offset_x_mm=c.flow_offset_y_mm=0.0f;
+    c.flow_x_mm_count=c.flow_y_mm_count=1.0f;
+    for (wrap=0u;wrap<2u;++wrap) for (phase=1u;phase<10u;++phase) {
+        uint32_t base=wrap ? UINT32_MAX-160u : 0u;
+        memset(&o,0,sizeof(o)); memset(&g,0,sizeof(g)); memset(&f,0,sizeof(f));
+        g.state=GYRO_RUNNING; g.calibrated=g.have_sample=g.angle_valid=g.rate_valid=1u;
+        f.state=FLOW_READY; f.have_sample=f.valid=f.tracking=f.comm_ok=1u; f.raw.squal=150u;
+        g.sequence=f.sequence=1u; g.sample_ms=f.sample_ms=base;
+        Chassis_OdometryProcess(&o,&c,&f,&g,base); CHECK(o.valid);
+        /* Both healthy 100Hz services. The older pending flow has a new gyro
+           bracket, even when every newest flow timestamp is still ahead. */
+        for (i=1u;i<=30u;++i) {
+            g.sequence=i+1u; g.sample_ms=base+i*10u;
+            f.sequence=i+1u; f.sample_ms=base+i*10u+phase; f.total_x=i;
+            Chassis_OdometryProcess(&o,&c,&f,&g,f.sample_ms);
+            CHECK(o.valid && !o.generation);
+        }
+        NEAR(o.x,29.0,0.001);
+    }
+    /* A genuine lack of usable gyro brackets must still time out at 100ms.
+       Snapshot consumption below misses every other gyro sample, making the
+       observed 20ms spans inadmissible under the unchanged 14ms limit. */
+    memset(&o,0,sizeof(o)); g.sequence=f.sequence=1u; g.sample_ms=f.sample_ms=0u;
+    f.total_x=0; Chassis_OdometryProcess(&o,&c,&f,&g,0u); CHECK(o.valid);
+    for (i=1u;i<=6u;++i) {
+        g.sequence=i*2u+1u; g.sample_ms=i*20u;
+        f.sequence=i*2u+1u; f.sample_ms=i*20u+5u; f.total_x=i*2u;
+        Chassis_OdometryProcess(&o,&c,&f,&g,f.sample_ms);
+    }
+    CHECK(!o.valid && o.last_issue==CHASSIS_ODOM_SYNC_TIMEOUT);
+    CHECK(o.break_quality==150u && !o.break_rejected && !o.break_gaps && o.break_paired_age_ms==105u);
+    puts("PASS: flow/gyro phase 1..9ms, clock wrap, retained pending sample, real alignment timeout");
+}
+static void fault_evidence_tests(void)
+{
+    Sim s; ChassisFault first; char text[43];
+    init(&s); ready(&s); s.flow.raw.squal=150u;
+    CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
+    run(&s,200u); s.freeze_flow=1u; run(&s,150u);
+    CHECK(s.chassis.data.reason==CHASSIS_FLOW_INVALID && s.chassis.data.fault.valid);
+    CHECK(s.chassis.data.fault.issue==CHASSIS_ODOM_FLOW_STALE);
+    CHECK(s.chassis.data.fault.quality==150u && s.chassis.data.fault.rejected==0u);
+    first=s.chassis.data.fault; s.freeze_flow=0u; run(&s,2500u);
+    CHECK(s.chassis.data.flow_valid && s.chassis.data.state==CHASSIS_FAULT);
+    CHECK(!memcmp(&first,&s.chassis.data.fault,sizeof(first)));
+    ChassisUi_Line(text,8u,0u,&s.chassis,s.now); CHECK(!strcmp(text,"FLOW INVALID: STALE"));
+    ready(&s); CHECK(!s.chassis.data.fault.valid);
+    CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
+    run(&s,200u);
+    /* Flow service recovered before the chassis next observed it. Retain the
+       historical rejection reason and quality, not the current healthy Q. */
+    ++s.flow.rejected; s.flow.last_rejection=FLOW_LOW_QUALITY;
+    s.flow.last_rejected_quality=12u; s.flow.last_rejected_ms=s.now-1u;
+    run(&s,1u);
+    CHECK(s.chassis.data.reason==CHASSIS_FLOW_INVALID && s.chassis.data.fault.quality==12u);
+    CHECK(s.chassis.data.fault.issue==CHASSIS_ODOM_FLOW_REJECTED);
+    ChassisUi_Line(text,8u,1u,&s.chassis,s.now); CHECK(!strcmp(text,"FLOW INVALID: LOW QUALITY"));
+    first=s.chassis.data.fault; run(&s,2500u);
+    CHECK(!memcmp(&first,&s.chassis.data.fault,sizeof(first)));
+    CHECK(!s.bus.wheels_pending && !s.chassis.data.sequence_active);
+    puts("PASS: first fault evidence survives live recovery; real rejection still stops the action");
 }
 static void closed_tests(void)
 {
@@ -369,6 +439,6 @@ static void result_tests(void)
 }
 int main(void)
 {
-    kinematics(); odometry_tests(); velocity_tests(); closed_tests(); faults(); result_tests();
+    kinematics(); odometry_tests(); alignment_phase_test(); velocity_tests(); closed_tests(); faults(); result_tests(); fault_evidence_tests();
     printf("PASS: %u chassis checks (software and simulation; no physical acceptance)\n",checks); return 0;
 }

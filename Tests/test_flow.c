@@ -117,9 +117,11 @@ static void test_service(void)
     Flow_GetSnapshot(&s,t+101u,&d); CHECK(!d.valid && !d.fresh && !strcmp(Flow_StateName(&d),"STALE"));
     f.burst[6]=0u; deltas(&f,123,-12); step(&s,&f,t+=10u);
     CHECK(!s.data.valid && s.data.error==FLOW_LOW_QUALITY && s.data.total_x==0);
+    CHECK(s.data.last_rejection==FLOW_LOW_QUALITY && s.data.last_rejected_ms==t && s.data.last_rejected_quality==0u);
     f.burst[6]=50u; f.burst[0]=0x30; step(&s,&f,t+=10u); CHECK(s.data.error==FLOW_STATUS);
     deltas(&f,1,-1); step(&s,&f,t+=120u); CHECK(s.data.error==FLOW_GAP && s.data.missed>=11u);
     step(&s,&f,t+=10u); CHECK(s.data.valid); x=s.data.total_x; y=s.data.total_y;
+    CHECK(s.data.last_rejection==FLOW_GAP && s.data.last_rejected_ms==t-10u);
     f.fail_at=f.exchanges+2u; step(&s,&f,t+=10u);
     CHECK(s.data.state==FLOW_ERROR && !s.data.valid && f.high && s.data.total_x==x && s.data.total_y==y);
     CHECK(s.data.last_fault==FLOW_SPI && s.data.errors==1u);

@@ -71,7 +71,11 @@ static void process(FlowService *s,uint32_t now)
         if (r!=PMW_READY) { fault(s,pmw_error(r),now); return; }
     }
     r=Pmw_Burst(&s->io,&d->raw);
-    if (r!=PMW_READY) { ++d->rejected; fault(s,pmw_error(r),now); return; }
+    if (r!=PMW_READY) {
+        ++d->rejected; d->last_rejection=pmw_error(r);
+        d->last_rejected_ms=now; d->last_rejected_quality=d->raw.squal;
+        fault(s,pmw_error(r),now); return;
+    }
     ++d->sequence; d->have_sample=1u; d->sample_ms=now; d->comm_ok=1u;
     d->dx=FLOW_X_SIGN*(int32_t)(FLOW_SWAP_XY ? d->raw.dy : d->raw.dx);
     d->dy=FLOW_Y_SIGN*(int32_t)(FLOW_SWAP_XY ? d->raw.dx : d->raw.dy);
@@ -89,7 +93,11 @@ static void process(FlowService *s,uint32_t now)
     }
     if (d->overflow) d->error=FLOW_OVERFLOW;
     d->valid=(uint8_t)(d->tracking && !d->overflow);
-    if (d->valid) s->last_valid=now; else ++d->rejected;
+    if (d->valid) s->last_valid=now;
+    else {
+        ++d->rejected; d->last_rejection=d->error;
+        d->last_rejected_ms=now; d->last_rejected_quality=d->raw.squal;
+    }
     if ((uint32_t)(now-s->last_valid)>=FLOW_INVALID_RESTART_MS) fault(s,FLOW_NO_VALID,now);
 }
 /*

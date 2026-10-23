@@ -42,10 +42,15 @@ void ChassisUi_Line(char out[43], unsigned row, uint8_t detail, const Chassis *c
     } else if (row==5u) snprintf(out,43,"V mm/s:%d,%d W d/s:%d",(int)d->output.vx,(int)d->output.vy,(int)d->output.omega);
     else if (row==6u) snprintf(out,43,"FLOW:%s GYRO:%s STOP:%s",d->flow_valid ? "OK" : "--",
         d->gyro_valid ? "OK" : "--",d->stop_pending ? "VERIFY" : "OK");
+    else if (row==7u && d->reason==CHASSIS_FLOW_INVALID && d->fault.valid)
+        snprintf(out,43,"AT Q:%u BAD:%lu G:%lu PAIR:%lu",d->fault.quality,
+            (unsigned long)d->fault.rejected,(unsigned long)d->fault.gaps,(unsigned long)d->fault.paired_age_ms);
     else if (row==7u && issues) snprintf(out,43,"CFG:%s%s%s",issues & 3u ? "MECH " : "",
         issues & 4u ? "SIGN " : "",issues & 56u ? "FLOW/CTRL" : "");
     else if (row==7u) snprintf(out,43,"TX:%lu REJ:%lu AGE:%lu",(unsigned long)d->submitted_frames,
         (unsigned long)d->publish_rejected,(unsigned long)d->feedback_age_ms);
+    else if (row==8u && d->reason==CHASSIS_FLOW_INVALID && d->fault.valid)
+        snprintf(out,43,"FLOW INVALID: %s",Chassis_FlowFaultName(d->fault.issue,d->fault.flow_error));
     else snprintf(out,43,"%s",Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason :
         d->rejection!=CHASSIS_OK ? d->rejection : issues ? CHASSIS_CONFIG : CHASSIS_OK));
 }

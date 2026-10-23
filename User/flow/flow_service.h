@@ -10,12 +10,14 @@ typedef enum { FLOW_INIT, FLOW_READY, FLOW_ERROR } FlowState;
 typedef enum { FLOW_OK, FLOW_SPI, FLOW_ID, FLOW_BUS_DATA, FLOW_LOW_QUALITY,
     FLOW_STATUS, FLOW_GAP, FLOW_NO_VALID, FLOW_OVERFLOW } FlowError;
 typedef struct {
-    FlowState state; FlowError error, last_fault;
+    FlowState state; FlowError error, last_fault, last_rejection;
     PmwMotion raw;
     int32_t dx, dy;
     int64_t total_x, total_y;
     uint32_t sequence, accepted, rejected, errors, missed, gaps, segments, clears, zero_sequence;
     uint32_t sample_ms, interval_ms, max_interval_ms, age_ms, max_process_us;
+    uint32_t last_rejected_ms;
+    uint8_t last_rejected_quality;
     uint8_t product, inverse, revision, comm_ok, tracking, fresh, valid, have_sample, overflow;
 } FlowSnapshot;
 typedef struct {

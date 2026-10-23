@@ -613,6 +613,12 @@ static void test_chassis_screen(void)
     CHECK(BspQrUart_Init()); app_fixture(&a,0u);
     for(now=0u;now<8000u;++now) app_step(&a,now);
     CHECK(!app_motor.count && a.chassis.data.state==CHASSIS_DISARMED);
+    /* Exercise explicit unconfigured state even when the local vehicle config
+       has been filled in by the user. Do not rewrite the production header. */
+    a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=0u;
+    a.chassis.config.wheel_diameter_mm=a.chassis.config.length_mm=a.chassis.config.width_mm=0.0f;
+    a.chassis.config.gear_ratio=0.0f; memset(a.chassis.config.motor_sign,0,sizeof(a.chassis.config.motor_sign));
+    a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=0.0f;
     click(&a,300,245,now); click(&a,20,14,now+2u);
     CHECK(a.ui.chassis_page && strstr(lines[0],"CHASSIS"));
     id=a.chassis.data.request_id;
@@ -630,6 +636,21 @@ static void test_chassis_screen(void)
     CHECK(app_motor.count && app_motor.code[0]==EMM_STOP);
     CHECK(!a.motor.wheels_pending && !a.chassis.data.sequence_active);
     CHECK(!bad_layout);
+    /* Render latched failure beside CURRENT healthy sensor indicators. The
+       historical cause must remain readable after live flow has recovered. */
+    a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=1u;
+    a.chassis.config.wheel_diameter_mm=100; a.chassis.config.length_mm=200; a.chassis.config.width_mm=180;
+    a.chassis.config.gear_ratio=1; a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=1;
+    { unsigned i; for(i=0u;i<4u;++i) a.chassis.config.motor_sign[i]=1; }
+    a.chassis.data.state=CHASSIS_FAULT; a.chassis.data.result=CHASSIS_FAILED;
+    a.chassis.data.reason=CHASSIS_FLOW_INVALID; a.chassis.data.stage=1u;
+    a.chassis.data.flow_valid=a.chassis.data.gyro_valid=1u; a.chassis.data.stop_pending=0u;
+    a.chassis.data.fault.valid=1u; a.chassis.data.fault.issue=CHASSIS_ODOM_SYNC_TIMEOUT;
+    a.chassis.data.fault.quality=150u; a.chassis.data.fault.paired_age_ms=105u;
+    a.ui.chassis_detail=0u; a.ui.redraw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,0,0,now);
+    CHECK(!strcmp(lines[8],"FLOW INVALID: TIME ALIGN") && strstr(lines[7],"AT Q:150"));
+    CHECK(!bad_layout); save_image("chassis_flow_fault.pgm");
     puts("PASS: no power-on motion, chassis screen/config/edge/back/global STOP");
 }
 
