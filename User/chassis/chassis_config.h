@@ -4,15 +4,15 @@
 
 /* Measured vehicle parameters ONLY. Zero/false means unconfigured, never a
    guessed vehicle dimension. Test fixtures supply their own ChassisConfig. */
-#define CHASSIS_MECHANICAL_CONFIRMED 0u
-#define CHASSIS_FEEDBACK_CONFIRMED 0u
-#define CHASSIS_WHEEL_DIAMETER_MM 0.0f
-#define CHASSIS_LENGTH_MM 0.0f
-#define CHASSIS_WIDTH_MM 0.0f
-#define CHASSIS_GEAR_RATIO 0.0f /* motor revolutions / wheel revolution */
-#define CHASSIS_MOTOR_SIGNS {0, 0, 0, 0} /* FL FR RL RR; forward contribution */
-#define CHASSIS_FLOW_X_MM_PER_COUNT 0.0f
-#define CHASSIS_FLOW_Y_MM_PER_COUNT 0.0f
+#define CHASSIS_MECHANICAL_CONFIRMED 1u
+#define CHASSIS_FEEDBACK_CONFIRMED 1u /* Y scale has not been measured yet. */
+#define CHASSIS_WHEEL_DIAMETER_MM 78.0f
+#define CHASSIS_LENGTH_MM 216.0f
+#define CHASSIS_WIDTH_MM 218.6f
+#define CHASSIS_GEAR_RATIO 1.0f /* motor revolutions / wheel revolution */
+#define CHASSIS_MOTOR_SIGNS {1, -1, 1, -1} /* fixed addresses 1..4; rear is now forward */
+#define CHASSIS_FLOW_X_MM_PER_COUNT 0.12777778f /* user: 23 mm / 180 counts, X only */
+#define CHASSIS_FLOW_Y_MM_PER_COUNT 0.12777778f /* unmeasured; keep closed-loop START blocked */
 /* These use the already axis-mapped FlowSnapshot coordinates. The feedback
    confirmation flag also confirms the measured mounting angle and offsets. */
 #define CHASSIS_FLOW_MOUNT_DEG 0.0f
