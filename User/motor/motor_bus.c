@@ -381,8 +381,9 @@ static void received(void *context, const EmmFrame *f)
         if (n->poll_samples[index] && b->now_ms - n->poll_last_ms[index] > n->max_poll_gap_ms[index])
             n->max_poll_gap_ms[index] = b->now_ms - n->poll_last_ms[index];
         n->poll_last_ms[index] = b->now_ms; ++n->poll_samples[index];
-        n->poll_due[index] = b->now_ms + (n->motion &&
-            (index == 0u || (index == 1u && d->address >= 5u)) ? 200u : 500u);
+        /* Position feedback also drives wheel odometry; refresh moving wheels
+           at the same 200ms target as speed, through the existing poll queue. */
+        n->poll_due[index] = b->now_ms + (n->motion && index != 2u ? 200u : 500u);
         d->last_error = MOTOR_ERROR_NONE; b->pending = 0u; return;
     }
     if (r.kind == DIAGNOSTIC) {

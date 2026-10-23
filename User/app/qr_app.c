@@ -139,7 +139,7 @@ void QrApp_Process(QrApp *a, uint32_t now)
     if (action == QR_UI_RESCAN)
         BspQrUart_BeginSession(&a->qr, now);
     else if (action==QR_UI_CHASSIS_START) (void)Chassis_StartAcceptance(&a->chassis,now);
-    else if ((action==QR_UI_FLOW_CLEAR || action==QR_UI_GYRO_CAL || action==QR_UI_GYRO_ZERO) &&
+    else if ((action==QR_UI_GYRO_CAL || action==QR_UI_GYRO_ZERO) &&
         Chassis_OwnsWheels(&a->chassis)) {
         a->motor.message="CHASSIS BUSY"; a->chassis.data.rejection=CHASSIS_AXIS_BUSY;
     }
@@ -160,7 +160,7 @@ void QrApp_Process(QrApp *a, uint32_t now)
     now = AppClock_Now();
     Flow_GetSnapshot(&a->flow, now, &flow);
     Gyro_GetSnapshot(&a->gyro, now, &gyro);
-    Chassis_Process(&a->chassis,&flow,&gyro,now);
+    Chassis_Process(&a->chassis,&gyro,now);
     now = AppClock_Now();
     QrUi_Process(&a->ui, &a->qr, &a->motor, &flow, &gyro, now);
     if (AppClock_Now() - now > a->ui.max_step_ms) a->ui.max_step_ms = AppClock_Now() - now;

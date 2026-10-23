@@ -17,18 +17,17 @@ static ChassisConfig config(void)
     c.mechanical_confirmed=c.feedback_confirmed=1u;
     c.wheel_diameter_mm=100.0f; c.length_mm=200.0f; c.width_mm=180.0f; c.gear_ratio=1.0f;
     c.motor_sign[0]=c.motor_sign[2]=1; c.motor_sign[1]=c.motor_sign[3]=-1;
-    c.flow_x_mm_count=0.2f; c.flow_y_mm_count=0.25f; c.flow_mount_deg=15.0f;
-    c.flow_offset_x_mm=45.0f; c.flow_offset_y_mm=-30.0f;
+
     return c;
 }
 typedef struct {
     MotorBus bus; Chassis chassis; ChassisConfig cfg;
-    FlowSnapshot flow; GyroSnapshot gyro;
+    GyroSnapshot gyro;
     uint32_t now, tx_done;
     uint8_t bytes[128], length, busy, response, online, flags[7];
-    uint8_t drop_ack, drop_stop, hold_tx, freeze_flow, freeze_gyro, stuck, reject_enable;
-    int32_t command[7]; double wheel[4];
-    double x,y,angle,rate, previous_x,previous_y,previous_angle, count_x,count_y;
+    uint8_t drop_ack, drop_stop, hold_tx, freeze_position, freeze_gyro, stuck, reject_enable, slip;
+    int32_t command[7]; double wheel[4], position[4];
+    double x,y,angle,rate;
     double history[64][4];
     unsigned sends[8][256], groups, stop_applied, bad_axis;
 } Sim;
@@ -67,7 +66,12 @@ static void reply(Sim *s)
         n=6u; r[2]=(uint8_t)(rpm<0); v=(uint32_t)(rpm<0 ? -rpm : rpm);
         r[3]=(uint8_t)(v>>8); r[4]=(uint8_t)v;
     } else if (b[1]==EMM_STATUS) r[2]=s->flags[i];
-    else if (b[1]==EMM_POSITION) { n=8u; r[2]=0u; }
+    else if (b[1]==EMM_POSITION) {
+        int32_t counts=i<4u ? rounded(s->position[i]) : 0;
+        if (a==s->freeze_position) return;
+        n=8u; r[2]=(uint8_t)(counts<0); v=(uint32_t)(counts<0 ? -counts : counts);
+        r[3]=(uint8_t)(v>>24); r[4]=(uint8_t)(v>>16); r[5]=(uint8_t)(v>>8); r[6]=(uint8_t)v;
+    }
     r[n-1u]=0x6Bu;
     MotorBus_Receive(&s->bus,r,2u,s->now);
     MotorBus_Receive(&s->bus,r+2u,n-2u,s->now);
@@ -79,12 +83,14 @@ static void plant(Sim *s)
        integer wire RPM and a 5ms sensor delay. No target-pose shortcut. */
     for (i=0u;i<4u;++i) {
         s->wheel[i]+=(s->command[i]-s->wheel[i])/80.0;
+        if (s->stuck) s->wheel[i]=0.0;
+        s->position[i]+=s->wheel[i]*65536.0/60000.0;
         w[i]=s->wheel[i]*(i & 1u ? -1.0 : 1.0)*5.235987755982989;
     }
     vx=(w[0]+w[1]+w[2]+w[3])*0.25;
     vy=(-w[0]+w[1]+w[2]-w[3])*0.25;
     omega=(-w[0]+w[1]-w[2]+w[3])/760.0/RAD;
-    if (s->stuck) vx=vy=omega=0.0;
+    if (s->slip) vx=vy=omega=0.0;
     s->x+=(cos(a)*vx-sin(a)*vy)*0.001;
     s->y+=(sin(a)*vx+cos(a)*vy)*0.001; s->angle+=omega*0.001; s->rate=omega;
     s->history[s->now%64u][0]=s->x; s->history[s->now%64u][1]=s->y;
@@ -97,19 +103,7 @@ static void sensors(Sim *s)
         ++s->gyro.sequence; s->gyro.sample_ms=s->now-5u;
         s->gyro.angle_deg=h[2]; s->gyro.rate_dps=(float)h[3];
     }
-    if (s->now%10u==0u && !s->freeze_flow) {
-        double a=h[2]*RAD, m=(h[2]+s->previous_angle)*0.5*RAD;
-        double sx=h[0]+cos(a)*45.0+sin(a)*30.0, sy=h[1]+sin(a)*45.0-cos(a)*30.0;
-        double dx=sx-s->previous_x, dy=sy-s->previous_y;
-        double bx=cos(m)*dx+sin(m)*dy, by=-sin(m)*dx+cos(m)*dy;
-        double mount=15.0*RAD;
-        s->count_x+=(cos(mount)*bx+sin(mount)*by)/0.2;
-        s->count_y+=(-sin(mount)*bx+cos(mount)*by)/0.25;
-        s->flow.total_x=(int64_t)(s->count_x+(s->count_x<0 ? -0.5 : 0.5));
-        s->flow.total_y=(int64_t)(s->count_y+(s->count_y<0 ? -0.5 : 0.5));
-        ++s->flow.sequence; s->flow.sample_ms=s->now-5u;
-        s->previous_x=sx; s->previous_y=sy; s->previous_angle=h[2];
-    }
+
 }
 static void run(Sim *s, uint32_t duration)
 {
@@ -121,7 +115,7 @@ static void run(Sim *s, uint32_t duration)
         }
         MotorBus_Process(&s->bus,s->now);
         if (s->response) { s->response=0u; reply(s); }
-        Chassis_Process(&s->chassis,&s->flow,&s->gyro,s->now);
+        Chassis_Process(&s->chassis,&s->gyro,s->now);
     }
 }
 static void init_at(Sim *s, uint32_t time)
@@ -133,8 +127,7 @@ static void init_at(Sim *s, uint32_t time)
     MotorBus_Init(&s->bus,t,time); Chassis_Init(&s->chassis,&s->bus,&s->cfg,time);
     s->gyro.state=GYRO_RUNNING; s->gyro.calibrated=s->gyro.rate_valid=s->gyro.angle_valid=s->gyro.have_sample=1u;
     s->gyro.calibration=GYRO_CAL_DONE;
-    s->flow.state=FLOW_READY; s->flow.have_sample=s->flow.comm_ok=s->flow.tracking=s->flow.valid=1u;
-    s->flow.segments=1u; s->previous_x=45.0; s->previous_y=-30.0;
+
     for (i=0u;i<64u;++i) s->history[i][0]=s->history[i][1]=s->history[i][2]=s->history[i][3]=0.0;
     run(s,2500u);
     CHECK(!s->groups && !s->bad_axis && s->chassis.odometry.valid);
@@ -184,8 +177,8 @@ static void kinematics(void)
     /* Invalid-config fixture is independent of the user's measured build config. */
     Chassis_DefaultConfig(&c); c.mechanical_confirmed=c.feedback_confirmed=0u;
     c.wheel_diameter_mm=c.length_mm=c.width_mm=c.gear_ratio=0.0f;
-    memset(c.motor_sign,0,sizeof(c.motor_sign)); c.flow_x_mm_count=c.flow_y_mm_count=0.0f;
-    CHECK(Chassis_ConfigIssues(&c,1u)==55u);
+    memset(c.motor_sign,0,sizeof(c.motor_sign));
+    CHECK(Chassis_ConfigIssues(&c,1u)==23u);
     puts("PASS: X kinematics, units/gearing/signs, proportional limits, quantization, invalid config/NaN/Inf");
 }
 static void velocity_tests(void)
@@ -231,118 +224,75 @@ static void velocity_tests(void)
 }
 static void odometry_tests(void)
 {
-    ChassisConfig c=config(); ChassisOdometry o;
-    GyroSnapshot g; FlowSnapshot f; uint32_t generation;
-    memset(&o,0,sizeof(o)); memset(&g,0,sizeof(g)); memset(&f,0,sizeof(f));
-    c.flow_mount_deg=c.flow_offset_x_mm=c.flow_offset_y_mm=0.0f;
-    c.flow_x_mm_count=2.0f; c.flow_y_mm_count=3.0f;
-    g.state=GYRO_RUNNING; g.calibrated=g.have_sample=g.angle_valid=g.rate_valid=1u;
-    g.sequence=1u; g.sample_ms=100u;
-    f.state=FLOW_READY; f.have_sample=f.valid=f.tracking=f.comm_ok=1u; f.sequence=1u; f.sample_ms=100u;
-    Chassis_OdometryProcess(&o,&c,&f,&g,100u); CHECK(o.valid); NEAR(o.x,0,0.001);
-    g.sequence=2u; g.sample_ms=110u; g.angle_deg=90;
-    f.sequence=2u; f.sample_ms=105u; f.total_x=10;
-    Chassis_OdometryProcess(&o,&c,&f,&g,110u);
-    NEAR(o.x,20*cos(22.5*RAD),0.001); NEAR(o.y,20*sin(22.5*RAD),0.001);
-    Chassis_OdometryProcess(&o,&c,&f,&g,111u); NEAR(o.x,20*cos(22.5*RAD),0.001);
-    f.sequence=3u; f.sample_ms=110u; f.total_x=20;
-    Chassis_OdometryProcess(&o,&c,&f,&g,111u);
-    NEAR(o.x,20*(cos(22.5*RAD)+cos(67.5*RAD)),0.001);
-    g.sequence=3u; g.sample_ms=120u;
-    f.sequence=5u; f.sample_ms=125u; f.total_x=40;
-    Chassis_OdometryProcess(&o,&c,&f,&g,125u); CHECK(o.flow_guard.sequence==3u);
-    g.sequence=4u; g.sample_ms=130u;
-    Chassis_OdometryProcess(&o,&c,&f,&g,130u);
-    NEAR(o.y,20*(sin(22.5*RAD)+sin(67.5*RAD))+40,0.001);
-    generation=o.generation; ++f.clears;
-    Chassis_OdometryProcess(&o,&c,&f,&g,130u); CHECK(o.generation!=generation);
-    generation=o.generation; ++g.zeros;
-    Chassis_OdometryProcess(&o,&c,&f,&g,130u); CHECK(o.generation!=generation);
-    /* Known pure rotation at an offset sensor, including crossing 360 degrees. */
-    memset(&o,0,sizeof(o)); c.flow_x_mm_count=c.flow_y_mm_count=0.001f;
-    c.flow_offset_x_mm=40; c.flow_offset_y_mm=-20;
-    g.sequence=1u; g.sample_ms=200u; g.angle_deg=359; f.sequence=1u; f.sample_ms=200u; f.total_x=f.total_y=0;
-    Chassis_OdometryProcess(&o,&c,&f,&g,200u);
-    {
-        double a=359*RAD,b=361*RAD,m=360*RAD;
-        double dx=(cos(b)-cos(a))*40+(sin(b)-sin(a))*20;
-        double dy=(sin(b)-sin(a))*40-(cos(b)-cos(a))*20;
-        f.total_x=rounded((cos(m)*dx+sin(m)*dy)/0.001);
-        f.total_y=rounded((-sin(m)*dx+cos(m)*dy)/0.001);
-    }
-    g.sequence=2u; g.sample_ms=210u; g.angle_deg=361; f.sequence=2u; f.sample_ms=210u;
-    Chassis_OdometryProcess(&o,&c,&f,&g,210u); NEAR(o.x,0,0.002); NEAR(o.y,0,0.002);
-    generation=o.generation; f.sample_ms=211u; ++f.sequence;
-    Chassis_OdometryProcess(&o,&c,&f,&g,211u); CHECK(o.flow_guard.sample_ms==210u);
-    g.sample_ms=320u; ++g.sequence;
-    Chassis_OdometryProcess(&o,&c,&f,&g,320u); CHECK(!o.valid && o.generation!=generation);
-    puts("PASS: odometry scale, bracket interpolation/wait, dedup/cumulative counts, resets, offset rotation/360 crossing");
-}
-static void alignment_phase_test(void)
-{
-    ChassisConfig c=config(); ChassisOdometry o; GyroSnapshot g; FlowSnapshot f;
-    unsigned i,phase,wrap;
-    c.flow_mount_deg=c.flow_offset_x_mm=c.flow_offset_y_mm=0.0f;
-    c.flow_x_mm_count=c.flow_y_mm_count=1.0f;
-    for (wrap=0u;wrap<2u;++wrap) for (phase=1u;phase<10u;++phase) {
-        uint32_t base=wrap ? UINT32_MAX-160u : 0u;
-        memset(&o,0,sizeof(o)); memset(&g,0,sizeof(g)); memset(&f,0,sizeof(f));
+    ChassisConfig c=config(); ChassisOdometry o; MotorBus b; GyroSnapshot g;
+    unsigned wrap,kind,i,t; uint32_t generation;
+    const double linear[4][4]={{100,100,100,100},{-100,100,100,-100},
+        {0,100,100,0},{-60,60,-60,60}};
+    for(wrap=0u;wrap<2u;++wrap) for(kind=0u;kind<4u;++kind) {
+        uint32_t base=wrap ? UINT32_MAX-1500u : 0u;
+        memset(&o,0,sizeof(o)); memset(&b,0,sizeof(b)); memset(&g,0,sizeof(g));
+        c.gear_ratio=2.0f;
         g.state=GYRO_RUNNING; g.calibrated=g.have_sample=g.angle_valid=g.rate_valid=1u;
-        f.state=FLOW_READY; f.have_sample=f.valid=f.tracking=f.comm_ok=1u; f.raw.squal=150u;
-        g.sequence=f.sequence=1u; g.sample_ms=f.sample_ms=base;
-        Chassis_OdometryProcess(&o,&c,&f,&g,base); CHECK(o.valid);
-        /* Both healthy 100Hz services. The older pending flow has a new gyro
-           bracket, even when every newest flow timestamp is still ahead. */
-        for (i=1u;i<=30u;++i) {
-            g.sequence=i+1u; g.sample_ms=base+i*10u;
-            f.sequence=i+1u; f.sample_ms=base+i*10u+phase; f.total_x=i;
-            Chassis_OdometryProcess(&o,&c,&f,&g,f.sample_ms);
-            CHECK(o.valid && !o.generation);
+        g.sequence=1u; g.sample_ms=base;
+        for(i=0u;i<4u;++i) {
+            b.nodes[i].data.online=1u; b.nodes[i].data.valid=MOTOR_VALID_POSITION;
+            b.nodes[i].data.position_seq=1u; b.nodes[i].data.position_ms=base;
         }
-        NEAR(o.x,29.0,0.001);
+        Chassis_OdometryProcess(&o,&c,&b,&g,base); CHECK(o.valid);
+        for(t=1u;t<=3000u;++t) {
+            if(t%10u==0u) { ++g.sequence; g.sample_ms=base+t; }
+            for(i=0u;i<4u;++i) if(t%500u==i*70u) {
+                MotorSnapshot *n=&b.nodes[i].data;
+                ++n->position_seq; n->position_ms=base+t;
+                n->position_counts=rounded(linear[kind][i]*c.motor_sign[i]*t*0.417215134018818);
+            }
+            Chassis_OdometryProcess(&o,&c,&b,&g,base+t); CHECK(o.valid && !o.generation);
+        }
+        {
+            double seconds=(uint32_t)(o.sample_ms-base)*0.001;
+            NEAR(o.x,(kind==0u ? 100.0 : kind==2u ? 50.0 : 0.0)*seconds,0.01);
+            NEAR(o.y,(kind==1u ? 100.0 : kind==2u ? 50.0 : 0.0)*seconds,0.01);
+        }
+        generation=o.generation;
+        ++b.nodes[2].data.position_seq; b.nodes[2].data.position_ms=base+3001u;
+        b.nodes[2].data.position_counts+=1000000;
+        Chassis_OdometryProcess(&o,&c,&b,&g,base+3001u);
+        CHECK(!o.valid && o.generation!=generation && o.last_issue==CHASSIS_ODOM_WHEEL_JUMP);
+        CHECK(o.break_wheel==3u);
     }
-    /* A genuine lack of usable gyro brackets must still time out at 100ms.
-       Snapshot consumption below misses every other gyro sample, making the
-       observed 20ms spans inadmissible under the unchanged 14ms limit. */
-    memset(&o,0,sizeof(o)); g.sequence=f.sequence=1u; g.sample_ms=f.sample_ms=0u;
-    f.total_x=0; Chassis_OdometryProcess(&o,&c,&f,&g,0u); CHECK(o.valid);
-    for (i=1u;i<=6u;++i) {
-        g.sequence=i*2u+1u; g.sample_ms=i*20u;
-        f.sequence=i*2u+1u; f.sample_ms=i*20u+5u; f.total_x=i*2u;
-        Chassis_OdometryProcess(&o,&c,&f,&g,f.sample_ms);
+    /* Clock/sequence reset and missing positions cannot masquerade as zero travel. */
+    memset(&o,0,sizeof(o)); memset(&b,0,sizeof(b)); g.sample_ms=5000u; ++g.sequence;
+    for(i=0u;i<4u;++i) {
+        b.nodes[i].data.online=1u; b.nodes[i].data.valid=MOTOR_VALID_POSITION;
+        b.nodes[i].data.position_seq=3u; b.nodes[i].data.position_ms=5000u;
     }
-    CHECK(!o.valid && o.last_issue==CHASSIS_ODOM_SYNC_TIMEOUT);
-    CHECK(o.break_quality==150u && !o.break_rejected && !o.break_gaps && o.break_paired_age_ms==105u);
-    puts("PASS: flow/gyro phase 1..9ms, clock wrap, retained pending sample, real alignment timeout");
+    Chassis_OdometryProcess(&o,&c,&b,&g,5000u); CHECK(o.valid);
+    b.nodes[0].data.position_seq=1u;
+    Chassis_OdometryProcess(&o,&c,&b,&g,5001u);
+    CHECK(!o.valid && o.last_issue==CHASSIS_ODOM_WHEEL_RESET);
+    memset(&o,0,sizeof(o)); b.nodes[0].data.position_seq=3u;
+    Chassis_OdometryProcess(&o,&c,&b,&g,5000u); CHECK(o.valid);
+    g.sample_ms=6601u; ++g.sequence;
+    Chassis_OdometryProcess(&o,&c,&b,&g,6601u);
+    CHECK(!o.valid && o.last_issue==CHASSIS_ODOM_WHEEL_STALE);
+    puts("PASS: motor 65536 counts/rev, gearing/signs, staggered replies/common-time interpolation, rotation cancellation, wrap/reset/jump/stale");
 }
 static void fault_evidence_tests(void)
 {
-    Sim s; ChassisFault first; char text[43];
-    init(&s); ready(&s); s.flow.raw.squal=150u;
+    Sim s; ChassisFault first; char text[43]; MotorSnapshot *n;
+    init(&s); ready(&s);
     CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
-    run(&s,200u); s.freeze_flow=1u; run(&s,150u);
-    CHECK(s.chassis.data.reason==CHASSIS_FLOW_INVALID && s.chassis.data.fault.valid);
-    CHECK(s.chassis.data.fault.issue==CHASSIS_ODOM_FLOW_STALE);
-    CHECK(s.chassis.data.fault.quality==150u && s.chassis.data.fault.rejected==0u);
-    first=s.chassis.data.fault; s.freeze_flow=0u; run(&s,2500u);
-    CHECK(s.chassis.data.flow_valid && s.chassis.data.state==CHASSIS_FAULT);
-    CHECK(!memcmp(&first,&s.chassis.data.fault,sizeof(first)));
-    ChassisUi_Line(text,8u,0u,&s.chassis,s.now); CHECK(!strcmp(text,"FLOW INVALID: STALE"));
-    ready(&s); CHECK(!s.chassis.data.fault.valid);
-    CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
-    run(&s,200u);
-    /* Flow service recovered before the chassis next observed it. Retain the
-       historical rejection reason and quality, not the current healthy Q. */
-    ++s.flow.rejected; s.flow.last_rejection=FLOW_LOW_QUALITY;
-    s.flow.last_rejected_quality=12u; s.flow.last_rejected_ms=s.now-1u;
+    run(&s,200u); n=&s.bus.nodes[2].data;
+    ++n->position_seq; n->position_ms=s.now; n->position_counts+=1000000;
     run(&s,1u);
-    CHECK(s.chassis.data.reason==CHASSIS_FLOW_INVALID && s.chassis.data.fault.quality==12u);
-    CHECK(s.chassis.data.fault.issue==CHASSIS_ODOM_FLOW_REJECTED);
-    ChassisUi_Line(text,8u,1u,&s.chassis,s.now); CHECK(!strcmp(text,"FLOW INVALID: LOW QUALITY"));
-    first=s.chassis.data.fault; run(&s,2500u);
+    CHECK(s.chassis.data.reason==CHASSIS_ODOMETRY_INVALID && s.chassis.data.fault.valid);
+    CHECK(s.chassis.data.fault.issue==CHASSIS_ODOM_WHEEL_JUMP && s.chassis.data.fault.wheel==3u);
+    first=s.chassis.data.fault; run(&s,5000u);
+    CHECK(s.chassis.data.odometry_valid && s.chassis.data.state==CHASSIS_FAULT);
     CHECK(!memcmp(&first,&s.chassis.data.fault,sizeof(first)));
-    CHECK(!s.bus.wheels_pending && !s.chassis.data.sequence_active);
-    puts("PASS: first fault evidence survives live recovery; real rejection still stops the action");
+    ChassisUi_Line(text,8u,0u,&s.chassis,s.now); CHECK(!strcmp(text,"ODOM INVALID: POSITION JUMP"));
+    ready(&s); CHECK(!s.chassis.data.fault.valid);
+    puts("PASS: first motor-position fault survives recovery; explicit prepare clears evidence");
 }
 static void closed_tests(void)
 {
@@ -371,13 +321,23 @@ static void closed_tests(void)
     { unsigned n=s.groups; run(&s,3000u); CHECK(s.groups==n && s.chassis.data.done); }
     printf("SIMULATION ONLY: eight segments complete in %lu ms, return %.1f/%.1f mm %.1f deg\n",
         (unsigned long)t,s.x,s.y,s.angle);
-    init(&s); ready(&s); s.freeze_flow=1u;
+    init(&s); ready(&s);
     CHECK(Chassis_RotateRelative(&s.chassis,270,30,s.now)==CHASSIS_ACCEPTED);
     finish(&s,40000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS); NEAR(s.angle,270,5.0);
+    {
+        double x=s.x,y=s.y;
+        CHECK(Chassis_MoveRelative(&s.chassis,100,0,80,s.now)==CHASSIS_ACCEPTED);
+        finish(&s,15000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS);
+        NEAR(s.x-x,0,20.0); NEAR(s.y-y,-100,20.0);
+    }
     init(&s); ready(&s); s.stuck=1u;
     CHECK(Chassis_MoveRelative(&s.chassis,100,0,100,s.now)==CHASSIS_ACCEPTED);
     finish(&s,15000u); CHECK(s.chassis.data.result==CHASSIS_FAILED && s.chassis.data.reason==CHASSIS_ACTION_TIMEOUT);
-    puts("PASS: independent delayed/inertial plant, eight segments, unwrapped +270 rotation, stuck timeout");
+    init(&s); ready(&s); s.slip=1u;
+    CHECK(Chassis_MoveRelative(&s.chassis,100,0,100,s.now)==CHASSIS_ACCEPTED);
+    finish(&s,15000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS);
+    NEAR(s.x,0.0,0.001); CHECK(s.chassis.data.x_mm>90.0);
+    puts("PASS: independent plant/eight segments/+270 then local move/stuck timeout; wheel slip is explicitly unobservable");
 }
 static void faults(void)
 {
@@ -386,10 +346,10 @@ static void faults(void)
         init(&s); ready(&s);
         CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
         run(&s,500u);
-        if (i==0u) s.freeze_flow=1u;
+        if (i==0u) s.freeze_position=1u;
         if (i==1u) s.freeze_gyro=1u;
-        if (i==2u) ++s.flow.clears;
-        if (i==3u) ++s.flow.rejected;
+        if (i==2u) { ++s.bus.nodes[0].data.position_seq; s.bus.nodes[0].data.position_ms=s.now; s.bus.nodes[0].data.position_counts+=1000000; }
+        if (i==3u) s.bus.nodes[1].data.position_seq=0u;
         if (i==4u) ++s.gyro.zeros;
         if (i==5u) ++s.gyro.restarts;
         if (i==6u) s.flags[2]|=4u;
@@ -416,7 +376,7 @@ static void result_tests(void)
     CHECK(Chassis_MoveRelative(&s.chassis,100,0,100,s.now)==CHASSIS_ACCEPTED);
     for (t=0u;t<15000u && s.chassis.data.state!=CHASSIS_STOPPING;++t) run(&s,1u);
     CHECK(s.chassis.data.state==CHASSIS_STOPPING && s.chassis.data.result!=CHASSIS_SUCCESS);
-    s.x+=50.0; finish(&s,6000u);
+    { unsigned j; for(j=0u;j<4u;++j) s.position[j]+=(j & 1u ? -1.0 : 1.0)*10430.37835047; } finish(&s,6000u);
     CHECK(s.chassis.data.result==CHASSIS_FAILED && s.chassis.data.reason==CHASSIS_FINAL_ERROR);
     Chassis_Stop(&s.chassis,s.now); finish(&s,5000u); CHECK(s.chassis.data.state==CHASSIS_FAULT);
     CHECK(Chassis_SetBodyVelocity(&s.chassis,10,0,0,s.now)==CHASSIS_NOT_READY); ready(&s);
@@ -429,7 +389,7 @@ static void result_tests(void)
     init(&s); CHECK(Chassis_StartAcceptance(&s.chassis,s.now)==CHASSIS_ACCEPTED);
     for (t=0u;t<20000u && !s.chassis.between;++t) run(&s,1u);
     CHECK(s.chassis.between && s.chassis.data.stage==1u);
-    ++s.flow.clears; run(&s,1u); CHECK(s.chassis.data.state==CHASSIS_STOPPING);
+    ++s.gyro.zeros; run(&s,1u); CHECK(s.chassis.data.state==CHASSIS_STOPPING);
     CHECK(!s.chassis.data.sequence_active); finish(&s,5000u); CHECK(s.chassis.data.result==CHASSIS_FAILED);
     init(&s); s.reject_enable=2u; CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_ACCEPTED);
     finish(&s,6000u); CHECK(s.chassis.data.result==CHASSIS_FAILED && !s.groups);
@@ -439,6 +399,6 @@ static void result_tests(void)
 }
 int main(void)
 {
-    kinematics(); odometry_tests(); alignment_phase_test(); velocity_tests(); closed_tests(); faults(); result_tests(); fault_evidence_tests();
+    kinematics(); odometry_tests(); velocity_tests(); closed_tests(); faults(); result_tests(); fault_evidence_tests();
     printf("PASS: %u chassis checks (software and simulation; no physical acceptance)\n",checks); return 0;
 }

@@ -618,7 +618,6 @@ static void test_chassis_screen(void)
     a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=0u;
     a.chassis.config.wheel_diameter_mm=a.chassis.config.length_mm=a.chassis.config.width_mm=0.0f;
     a.chassis.config.gear_ratio=0.0f; memset(a.chassis.config.motor_sign,0,sizeof(a.chassis.config.motor_sign));
-    a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=0.0f;
     click(&a,300,245,now); click(&a,20,14,now+2u);
     CHECK(a.ui.chassis_page && strstr(lines[0],"CHASSIS"));
     id=a.chassis.data.request_id;
@@ -637,20 +636,20 @@ static void test_chassis_screen(void)
     CHECK(!a.motor.wheels_pending && !a.chassis.data.sequence_active);
     CHECK(!bad_layout);
     /* Render latched failure beside CURRENT healthy sensor indicators. The
-       historical cause must remain readable after live flow has recovered. */
+       historical cause must remain readable after motor position feedback has recovered. */
     a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=1u;
     a.chassis.config.wheel_diameter_mm=100; a.chassis.config.length_mm=200; a.chassis.config.width_mm=180;
-    a.chassis.config.gear_ratio=1; a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=1;
+    a.chassis.config.gear_ratio=1;
     { unsigned i; for(i=0u;i<4u;++i) a.chassis.config.motor_sign[i]=1; }
     a.chassis.data.state=CHASSIS_FAULT; a.chassis.data.result=CHASSIS_FAILED;
-    a.chassis.data.reason=CHASSIS_FLOW_INVALID; a.chassis.data.stage=1u;
-    a.chassis.data.flow_valid=a.chassis.data.gyro_valid=1u; a.chassis.data.stop_pending=0u;
+    a.chassis.data.reason=CHASSIS_ODOMETRY_INVALID; a.chassis.data.stage=1u;
+    a.chassis.data.odometry_valid=a.chassis.data.gyro_valid=1u; a.chassis.data.stop_pending=0u;
     a.chassis.data.fault.valid=1u; a.chassis.data.fault.issue=CHASSIS_ODOM_SYNC_TIMEOUT;
-    a.chassis.data.fault.quality=150u; a.chassis.data.fault.paired_age_ms=105u;
+    a.chassis.data.fault.wheel=2u; a.chassis.data.fault.sample_age_ms=105u;
     a.ui.chassis_detail=0u; a.ui.redraw=1u;
     finish_ui(&a.ui,&a.qr,&a.motor,0,0,now);
-    CHECK(!strcmp(lines[8],"FLOW INVALID: TIME ALIGN") && strstr(lines[7],"AT Q:150"));
-    CHECK(!bad_layout); save_image("chassis_flow_fault.pgm");
+    CHECK(!strcmp(lines[8],"ODOM INVALID: TIME ALIGN") && strstr(lines[7],"AT WHEEL:2"));
+    CHECK(!bad_layout); save_image("chassis_motor_fault.pgm");
     puts("PASS: no power-on motion, chassis screen/config/edge/back/global STOP");
 }
 
@@ -849,6 +848,28 @@ static void test_review_parallel(void)
         (unsigned long)a.qr.data.duplicates);
     lcd_timed=trigger_measure=0u;
 }
+static void test_chassis_no_flow(void)
+{
+    QrApp a; ChassisConfig cfg; unsigned i; uint32_t flow_clear_before;
+    CHECK(BspQrUart_Init()); app_fixture(&a,400000u);
+    review_advance(&a,2500u); review_press(&a,340,14); review_press(&a,20,245);
+    review_advance(&a,2300u); CHECK(a.gyro.data.angle_valid);
+    Chassis_DefaultConfig(&cfg); cfg.mechanical_confirmed=cfg.feedback_confirmed=1u;
+    cfg.wheel_diameter_mm=100; cfg.length_mm=200; cfg.width_mm=180; cfg.gear_ratio=1;
+    for(i=0u;i<4u;++i) cfg.motor_sign[i]=1;
+    Chassis_Init(&a.chassis,&a.motor,&cfg,tick); review_advance(&a,1000u);
+    FlowTest_Fail(1u); review_advance(&a,1000u); CHECK(!a.flow.data.valid);
+    CHECK(Chassis_StartAcceptance(&a.chassis,tick)==CHASSIS_ACCEPTED);
+    review_advance(&a,700u);
+    CHECK(a.chassis.data.state==CHASSIS_MOVING && a.chassis.data.sequence_active);
+    flow_clear_before=a.flow.data.clears; Flow_ResetTotals(&a.flow); review_advance(&a,700u);
+    CHECK(a.flow.data.clears==flow_clear_before+1u && a.chassis.data.state==CHASSIS_MOVING);
+    CHECK(a.chassis.data.reason==CHASSIS_OK && a.chassis.data.odometry_valid);
+    Chassis_Stop(&a.chassis,tick); review_advance(&a,2000u);
+    CHECK(a.chassis.data.result==CHASSIS_CANCELLED && !a.motor.wheels_pending);
+    FlowTest_Fail(0u);
+    puts("PASS: actual QrApp/flow failure before START and CLEAR during move do not affect chassis; STOP preserved");
+}
 static void test_chassis_active(void)
 {
     QrApp a; ChassisConfig cfg; uint32_t start,next_command,next_scan,cleared,zeros,requests;
@@ -859,7 +880,6 @@ static void test_chassis_active(void)
     Chassis_DefaultConfig(&cfg);
     cfg.mechanical_confirmed=cfg.feedback_confirmed=1u; /* synthetic fixture only */
     cfg.wheel_diameter_mm=100; cfg.length_mm=200; cfg.width_mm=180; cfg.gear_ratio=1;
-    cfg.flow_x_mm_count=cfg.flow_y_mm_count=0.1f;
     for(i=0u;i<4u;++i) cfg.motor_sign[i]=1;
     Chassis_Init(&a.chassis,&a.motor,&cfg,tick); review_advance(&a,20u);
     CHECK(Chassis_Prepare(&a.chassis,tick)==CHASSIS_ACCEPTED);
@@ -884,7 +904,7 @@ static void test_chassis_active(void)
         review_advance(&a,1u);
     }
     CHECK(phase==6u && a.chassis.data.state==CHASSIS_VELOCITY && app_motor.groups>=15u);
-    CHECK(a.flow.data.clears==cleared && a.gyro.data.zeros==zeros && a.gyro.data.cal_requests==requests);
+    CHECK(a.flow.data.clears==cleared+1u && a.gyro.data.zeros==zeros && a.gyro.data.cal_requests==requests);
     CHECK(a.gyro.data.angle_valid && a.qr.data.duplicates>=18u && !bad_layout);
     for(i=0u;i<app_motor.count;++i) CHECK(app_motor.address[i]<=4u);
     review_press(&a,170,245); review_advance(&a,1000u); groups=app_motor.groups;
@@ -899,6 +919,7 @@ static void test_chassis_active(void)
 int main(int argc,char **argv)
 {
     if(argc>1 && !strcmp(argv[1],"chassis-active")) { test_chassis_active(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"chassis-no-flow")) { test_chassis_no_flow(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-parallel")) { test_review_parallel(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-ui")) { test_review_ui(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-gate")) { test_review_gate(); return 0; }

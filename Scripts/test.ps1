@@ -19,7 +19,7 @@ $qrSources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'User\chassis
 $qrArgs = ($qrSources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 # Existing gyro calibration tests use the normal calibration mode.
 # A separate fixed-bias build below covers the shipped application configuration.
-$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe review-ui && qr_tests.exe review-gate && qr_tests.exe chassis-screen && qr_tests.exe review-parallel && qr_tests.exe chassis-active'
+$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe review-ui && qr_tests.exe review-gate && qr_tests.exe chassis-screen && qr_tests.exe review-parallel && qr_tests.exe chassis-active && qr_tests.exe chassis-no-flow'
 & $env:ComSpec /d /s /c $qrCommand
 if ($LASTEXITCODE -ne 0) { throw 'QR host tests failed' }
 $busSources = @('Tests\test_motor_bus.c', 'User\motor\emm_protocol.c', 'User\motor\motor_bus.c') | ForEach-Object { Join-Path $projectRoot $_ }
@@ -42,7 +42,7 @@ $configuredCommand = $qrCommand.Replace('/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_SEC
 & $env:ComSpec /d /s /c $configuredCommand
 if ($LASTEXITCODE -ne 0) { throw 'Configured manual application tests failed' }
 $fixedCommand = $qrCommand.Replace('/DGYRO_TEMP_FIXED_BIAS_ENABLED=0', '/DGYRO_TEMP_FIXED_BIAS_ENABLED=1').Replace('/Fe:qr_tests.exe', '/Fe:qr_fixed_tests.exe')
-$fixedCommand = $fixedCommand.Substring(0, $fixedCommand.IndexOf(' && qr_tests.exe')) + ' && qr_fixed_tests.exe chassis-screen'
+$fixedCommand = $fixedCommand.Substring(0, $fixedCommand.IndexOf(' && qr_tests.exe')) + ' && qr_fixed_tests.exe chassis-screen && qr_fixed_tests.exe chassis-no-flow'
 & $env:ComSpec /d /s /c $fixedCommand
 if ($LASTEXITCODE -ne 0) { throw 'Default fixed-bias application tests failed' }
 & (Join-Path $PSScriptRoot "test_chassis.ps1")

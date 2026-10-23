@@ -31,26 +31,24 @@ void ChassisUi_Line(char out[43], unsigned row, uint8_t detail, const Chassis *c
         c->config.width_mm>0 ? "SET" : "--",c->config.gear_ratio>0 ? "SET" : "--");
     else if (issues && row==5u) snprintf(out,43,"SIGNS FL/FR/RL/RR:%d/%d/%d/%d",
         c->config.motor_sign[0],c->config.motor_sign[1],c->config.motor_sign[2],c->config.motor_sign[3]);
-    else if (issues && row==6u) snprintf(out,43,"FLOW X:%s Y:%s OFFSET:VERIFY",
-        c->config.flow_x_mm_count>0 ? "SET" : "--",c->config.flow_y_mm_count>0 ? "SET" : "--");
+    else if (issues && row==6u) snprintf(out,43,"VERIFY MOTOR POSITION + GYRO");
     else if (row==3u) snprintf(out,43,"TARGET X:%d Y:%d A:%d",number(d->target_x_mm),number(d->target_y_mm),number(d->target_angle_deg));
     else if (row==4u) {
-        if (d->pose_valid) snprintf(out,43,"NOW X:%d Y:%d A:%d",number(d->x_mm),number(d->y_mm),number(d->angle_deg));
+        if (d->pose_valid) snprintf(out,43,"EST X:%d Y:%d A:%d",number(d->x_mm),number(d->y_mm),number(d->angle_deg));
         else if (c->have_origin && d->gyro_valid && Chassis_GyroContinuous(&c->action_gyro,&c->gyro))
-            snprintf(out,43,"NOW X:-- Y:-- A:%d",number(d->angle_deg));
-        else strcpy(out,"NOW X:-- Y:-- A:--");
+            snprintf(out,43,"EST X:-- Y:-- A:%d",number(d->angle_deg));
+        else strcpy(out,"EST X:-- Y:-- A:--");
     } else if (row==5u) snprintf(out,43,"V mm/s:%d,%d W d/s:%d",(int)d->output.vx,(int)d->output.vy,(int)d->output.omega);
-    else if (row==6u) snprintf(out,43,"FLOW:%s GYRO:%s STOP:%s",d->flow_valid ? "OK" : "--",
+    else if (row==6u) snprintf(out,43,"ODOM:%s GYRO:%s STOP:%s",d->odometry_valid ? "OK" : "--",
         d->gyro_valid ? "OK" : "--",d->stop_pending ? "VERIFY" : "OK");
-    else if (row==7u && d->reason==CHASSIS_FLOW_INVALID && d->fault.valid)
-        snprintf(out,43,"AT Q:%u BAD:%lu G:%lu PAIR:%lu",d->fault.quality,
-            (unsigned long)d->fault.rejected,(unsigned long)d->fault.gaps,(unsigned long)d->fault.paired_age_ms);
+    else if (row==7u && d->reason==CHASSIS_ODOMETRY_INVALID && d->fault.valid)
+        snprintf(out,43,"AT WHEEL:%u ODOM AGE:%lu",d->fault.wheel,(unsigned long)d->fault.sample_age_ms);
     else if (row==7u && issues) snprintf(out,43,"CFG:%s%s%s",issues & 3u ? "MECH " : "",
-        issues & 4u ? "SIGN " : "",issues & 56u ? "FLOW/CTRL" : "");
+        issues & 4u ? "SIGN " : "",issues & 24u ? "MOTOR/GYRO/CTRL" : "");
     else if (row==7u) snprintf(out,43,"TX:%lu REJ:%lu AGE:%lu",(unsigned long)d->submitted_frames,
         (unsigned long)d->publish_rejected,(unsigned long)d->feedback_age_ms);
-    else if (row==8u && d->reason==CHASSIS_FLOW_INVALID && d->fault.valid)
-        snprintf(out,43,"FLOW INVALID: %s",Chassis_FlowFaultName(d->fault.issue,d->fault.flow_error));
+    else if (row==8u && d->reason==CHASSIS_ODOMETRY_INVALID && d->fault.valid)
+        snprintf(out,43,"ODOM INVALID: %s",Chassis_OdometryIssueName(d->fault.issue));
     else snprintf(out,43,"%s",Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason :
         d->rejection!=CHASSIS_OK ? d->rejection : issues ? CHASSIS_CONFIG : CHASSIS_OK));
 }
