@@ -7,6 +7,8 @@
 #include "./chassis/chassis_ui.h"
 #include "./flow/flow_ui.h"
 #include "./gyro/gyro_ui.h"
+#include "./vision/vision_ui.h"
+#include "./mission/mission_ui.h"
 #include "./lcd/bsp_lcd.h"
 #include <stdio.h>
 #include <string.h>
@@ -34,6 +36,37 @@ QrUiAction QrUi_Touch(QrUi *u, int32_t x, int32_t y, uint8_t down)
     uint8_t edge = (uint8_t)(down && !u->was_down);
     u->was_down = down;
     if (!edge || x < 8 || x >= 472 || y < 0 || y >= 264) return QR_UI_NONE;
+    if (u->mission_page) {
+        if ((x<304 && y>=4 && y<28) || (x>=248 && y>=232)) {
+            u->mission_page=0u; u->redraw=1u;
+        } else if (y>=232) {
+            if (x<152) return QR_UI_MISSION_START;
+            if (x>=160 && x<240) return QR_UI_STOP_ALL;
+        }
+        return QR_UI_NONE;
+    }
+    if (u->vision_page) {
+        if (y>=4 && y<28 && x<304) { u->vision_page=0u; u->redraw=1u; }
+        else if (y>=60 && y<86) u->vision_mode=(uint8_t)((u->vision_mode+1u)%5u);
+        else if (y>=92 && y<110) {
+            if (x<160) u->vision_color=(uint8_t)(u->vision_color%6u+1u);
+            else if (x<312) u->vision_zone=(uint8_t)(u->vision_zone%2u+1u);
+            else u->vision_position=(uint8_t)(u->vision_position%3u+1u);
+        } else if (y>=232) {
+            if (x>=160 && x<240) return QR_UI_VISION_STOP;
+            if (x<152) return QR_UI_VISION_SCAN;
+            if (x>=248) { u->vision_page=0u; u->redraw=1u; }
+        }
+        return QR_UI_NONE;
+    }
+    if (!u->motor_page && !u->flow_page && !u->gyro_page && y>=32 && y<52) {
+        u->mission_page=1u; u->redraw=1u; return QR_UI_NONE;
+    }
+    if (!u->motor_page && !u->flow_page && !u->gyro_page && x<304 && y>=4 && y<28) {
+        u->vision_page=1u; u->redraw=1u;
+        if (!u->vision_color) u->vision_color=u->vision_zone=u->vision_position=1u;
+        return QR_UI_NONE;
+    }
     if (x>=312 && x<392 && y>=4 && y<28) {
         u->gyro_page=1u; u->gyro_detail=0u; u->redraw=1u; return QR_UI_NONE;
     }
@@ -96,7 +129,7 @@ static void qr_page(QrUi *u, const QrService *s, uint32_t now)
 {
     char t[43];
     const QrSnapshot *d = &s->data;
-    line(u, 0u, "XM1605 UART UNVERIFIED");
+    line(u, 0u, "QR:VISION / STATUS:RACE");
     snprintf(t, sizeof(t), "S%lu %s", (unsigned long)d->session, QrService_StateName(s)); line(u, 1u, t);
     line(u, 2u, d->valid ? d->current.text : "--");
     if (d->valid) snprintf(t, sizeof(t), "ACCEPT:%lu AT:%lums", (unsigned long)d->accepted_seq,
@@ -168,7 +201,7 @@ static void motor_page(QrUi *u, const MotorBus *b, uint32_t now)
    may exceed this target; the gyro still detects and invalidates that gap.
    No service is called here: all modules resume in the common app loop. */
 enum { DRAW_IDLE, DRAW_CLEAR, DRAW_ROWS, DRAW_TEXT, DRAW_BUTTONS, DRAW_LABELS };
-enum { JOB_MOTOR=1, JOB_FLOW=2, JOB_GYRO=4, JOB_DETAIL=8, JOB_MANUAL=16, JOB_CHASSIS=32 };
+enum { JOB_MOTOR=1, JOB_FLOW=2, JOB_GYRO=4, JOB_DETAIL=8, JOB_MANUAL=16, JOB_CHASSIS=32, JOB_VISION=64, JOB_MISSION=128 };
 /*
  * 一次最多绘制两个字符，offset 记录进度，下轮继续同一行或按钮标签。
  */
@@ -212,7 +245,7 @@ static void draw_step(QrUi *u)
     } else if (u->drawing==DRAW_TEXT) {
         LCD_SetBackColor(LCD_COLOR_BLACK); LCD_SetTextColor(LCD_COLOR_WHITE);
         if (u->target[u->row][u->offset]) text_step(u,8u,row_y[u->row],u->target[u->row],
-            u->row==2u && !(f & (JOB_MOTOR|JOB_FLOW|JOB_GYRO)) ? &Font24 : &Font16);
+            u->row==2u && !(f & (JOB_MOTOR|JOB_FLOW|JOB_GYRO|JOB_VISION|JOB_MISSION)) ? &Font24 : &Font16);
         if (!u->target[u->row][u->offset]) {
             strcpy(u->previous[u->row],u->target[u->row]); ++u->row;
             u->strip=0u; u->drawing=DRAW_ROWS;
@@ -223,17 +256,19 @@ static void draw_step(QrUi *u)
         u->strip+=4u;
         if (u->strip==(u->button<3u ? 32u : 24u)) {
             u->strip=0u;
-            if (++u->button==5u) { u->button=u->offset=0u; u->drawing=DRAW_LABELS; }
+            if (++u->button==5u || ((f & (JOB_VISION|JOB_MISSION)) && u->button==3u)) {
+                u->button=u->offset=0u; u->drawing=DRAW_LABELS;
+            }
         }
     } else if (u->drawing==DRAW_LABELS) {
         switch (u->button) {
         case 0u: label="STOP"; break;
-        case 1u: label=(f & JOB_GYRO) ? "CAL" : (f & JOB_FLOW) ? "CLEAR" :
+        case 1u: label=(f & JOB_MISSION) ? "START" : (f & JOB_VISION) ? "SCAN" : (f & JOB_GYRO) ? "CAL" : (f & JOB_FLOW) ? "CLEAR" :
             (f & JOB_CHASSIS) ? "START" : (f & JOB_MOTOR) ? ((f & JOB_MANUAL) ? "READ ONLY" : "MANUAL") : "RESCAN"; break;
         case 2u: label=(f & JOB_GYRO) ? "ZERO" : ""; break;
-        case 3u: label=(f & (JOB_FLOW|JOB_GYRO|JOB_CHASSIS)) ? "BACK" : (f & JOB_MOTOR) ? "QR" : "MOTOR"; break;
-        case 4u: label="GYRO"; break;
-        default: label=(f & (JOB_FLOW|JOB_GYRO)) ? ((f & JOB_DETAIL) ? "DATA" : "MORE") : "FLOW"; break;
+        case 3u: label=(f & (JOB_FLOW|JOB_GYRO|JOB_CHASSIS|JOB_VISION|JOB_MISSION)) ? "BACK" : (f & JOB_MOTOR) ? "QR" : "MOTOR"; break;
+        case 4u: label=(f & (JOB_VISION|JOB_MISSION)) ? "" : "GYRO"; break;
+        default: label=(f & (JOB_VISION|JOB_MISSION)) ? "" : (f & (JOB_FLOW|JOB_GYRO)) ? ((f & JOB_DETAIL) ? "DATA" : "MORE") : "FLOW"; break;
         }
         LCD_SetBackColor(LCD_COLOR_WHITE); LCD_SetTextColor(LCD_COLOR_BLACK);
         if (label[u->offset]) text_step(u,lx[u->button],u->button<4u ? 240u : 10u,label,&Font16);
@@ -258,10 +293,19 @@ void QrUi_Process(QrUi *u, const QrService *s, const MotorBus *motor, const Flow
             memset(u->previous,0,sizeof(u->previous)); u->clear_y=0u; u->drawing=DRAW_CLEAR;
         } else { u->row=u->strip=0u; u->drawing=DRAW_ROWS; }
         u->redraw=0u; u->last_draw=now;
-        u->job_flags=(uint8_t)((u->motor_page ? JOB_MOTOR : 0u) | (u->flow_page ? JOB_FLOW : 0u) |
+        u->job_flags=(uint8_t)((u->mission_page ? JOB_MISSION : 0u) | (u->vision_page ? JOB_VISION : 0u) | (u->motor_page ? JOB_MOTOR : 0u) | (u->flow_page ? JOB_FLOW : 0u) |
             (u->gyro_page ? JOB_GYRO : 0u) | (u->chassis_page ? JOB_CHASSIS : 0u) | (motor->manual ? JOB_MANUAL : 0u) |
             ((u->gyro_page ? u->gyro_detail : u->flow_detail) ? JOB_DETAIL : 0u));
-        if (u->gyro_page || u->flow_page) {
+        if (u->mission_page && u->mission) {
+            unsigned i; char t[43];
+            for (i=0u;i<9u;++i) { MissionUi_Line(t,i,u->mission,now); line(u,i,t); }
+        } else if (u->vision_page && u->vision) {
+            unsigned i; char t[43];
+            for (i=0u;i<9u;++i) {
+                VisionUi_Line(t,i,u->vision,u->vision_mode,u->vision_color,u->vision_zone,u->vision_position,now);
+                line(u,i,t);
+            }
+        } else if (u->gyro_page || u->flow_page) {
             unsigned i; char t[43];
             for (i=0u;i<9u;++i) {
                 if (u->gyro_page) GyroUi_Line(t,i,u->gyro_detail,gyro);

@@ -1,7 +1,7 @@
-﻿/*
- * 程序入口总览：先完成 HAL、180 MHz 时钟、调试串口、触摸和 LCD 初始化，
- * 再建立电机/扫码通信与应用状态，最后由 QrApp_Process 持续推进各模块。
- * 这是协作式主循环；各服务需及时返回，运行期等待由状态和时间期限表达。
+/*
+ * 入口：HAL/时钟、触摸与 LCD、电机与扫码、应用初始化。
+ * QrApp_Init 建立 K230 视觉通信及固定启停区2的比赛调度；上电等待显式启动。
+ * 协作式主循环逐步推进通信、传感器和界面。
  */
 #include "main.h"
 #include "./usart/bsp_debug_usart.h"
@@ -12,10 +12,7 @@
 #include "./usart/bsp_qr_uart.h"
 #include "./usart/bsp_qr_trigger.h"
 
-/*
- * 一次性初始化硬件并进入统一调度。app 使用静态存储，长期保留七轴、扫码、
- * 光流、陀螺和界面的状态；默认四轮上电测试是否执行由电机配置宏决定。
- */
+/* 应用对象静态保存；动作由屏幕或后续明确的任务请求触发。 */
 int main(void)
 {
     static QrApp app;
@@ -36,7 +33,7 @@ int main(void)
     BspQrTrigger_Init();
     QrApp_Init(&app, motor, qr_ready, HAL_GetTick());
     while (1) {
-        /* Diagnostics and explicitly started chassis actions share one motor bus. */
+        /* Communication, sensors, mission and UI advance without blocking. */
         QrApp_Process(&app, HAL_GetTick());
     }
 }

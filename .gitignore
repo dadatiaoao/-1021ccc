@@ -45,5 +45,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# Python protocol fixture imports.
+__pycache__/
+*.py[cod]
+
 # Keep .uvprojx/.uvoptx, .ioc, custom .sct/.ini files, source libraries,
 # documentation and binary resources such as fonts/images under version control.

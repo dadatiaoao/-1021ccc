@@ -875,8 +875,83 @@ static void test_chassis_active(void)
         (unsigned long)a.gyro.data.max_interval_ms,(unsigned long)a.qr.data.duplicates);
     lcd_timed=trigger_measure=0u;
 }
+static uint8_t vision_last_command;
+static unsigned vision_sent;
+static int vision_send(void *ctx,const uint8_t *bytes,uint8_t length)
+{
+    (void)ctx; CHECK(length>=4u && bytes[0]==0xAAu);
+    vision_last_command=bytes[2]; ++vision_sent; return 1;
+}
+static void test_vision_screen(void)
+{
+    QrApp a;
+    VisionTransport t={0,vision_send,motor_busy};
+    uint32_t now;
+    CHECK(BspQrUart_Init()); app_fixture(&a,0u);
+    VisionService_Init(&a.vision,t,0u);
+    for (now=0u;now<2000u;++now) app_step(&a,now);
+    click(&a,20,14,now); CHECK(a.ui.vision_page && !a.ui.motor_page);
+    for(now+=2u;now<4000u;++now) app_step(&a,now);
+    CHECK(strstr(lines[0],"VISION") && !bad_layout && !app_motor.count);
+    save_image("vision_idle.pgm");
+    click(&a,20,66,now); CHECK(a.ui.vision_mode==1u);
+    click(&a,20,98,now+2u); CHECK(a.ui.vision_color==2u);
+    click(&a,200,98,now+4u); CHECK(a.ui.vision_zone==2u);
+    click(&a,340,98,now+6u); CHECK(a.ui.vision_position==2u);
+    click(&a,20,245,now+8u); CHECK(a.vision.state==VISION_CONFIGURING && vision_sent==1u);
+    CHECK(vision_last_command==VISION_STOP && !app_motor.count);
+    click(&a,170,245,now+10u); CHECK(a.vision.state==VISION_STOPPING && !app_motor.count);
+    click(&a,300,245,now+12u); CHECK(!a.ui.vision_page && !a.ui.motor_page);
+    for(now+=14u;now<6000u;++now) app_step(&a,now);
+    CHECK(!bad_layout && !app_motor.count && strstr(lines[0],"QR"));
+    puts("PASS: vision screen, parameters, SCAN/STOP and BACK without motor actions");
+}
+static unsigned mission_begun,mission_cancelled;
+static uint32_t mission_test_blocked(void *ctx,uint32_t now)
+{ (void)ctx; (void)now; return 0u; }
+static int mission_test_begin(void *ctx,const MissionAction *action,uint32_t now)
+{ (void)ctx; (void)action; (void)now; ++mission_begun; return 1; }
+static MissionActionResult mission_test_poll(void *ctx,uint32_t id,QrTaskCode *task,uint32_t now)
+{ (void)ctx; (void)id; (void)task; (void)now; return MISSION_WAIT; }
+static void mission_test_stop(void *ctx,uint32_t now)
+{ (void)ctx; (void)now; ++mission_cancelled; }
+static void test_mission_screen(void)
+{
+    QrApp a; uint32_t now; unsigned before;
+    MissionPort port={0,mission_test_blocked,mission_test_begin,mission_test_poll,mission_test_stop};
+    CHECK(BspQrUart_Init()); app_fixture(&a,0u);
+    for (now=0u;now<2000u;++now) app_step(&a,now);
+    before=app_motor.count;
+    click(&a,20,40,now); CHECK(a.ui.mission_page && !a.ui.motor_page);
+    for (now+=2u;now<4000u;++now) app_step(&a,now);
+    CHECK(strstr(lines[0],"RACE ZONE 2") && strstr(lines[1],"NOT READY") && !bad_layout);
+    CHECK(strstr(lines[7],"ROUTE") && strstr(lines[7],"ARM"));
+    save_image("mission_idle.pgm");
+    click(&a,20,245,now); CHECK(a.mission.state==MISSION_IDLE && !a.mission.started);
+    CHECK(a.mission.error==MISSION_NOT_READY && app_motor.count==before);
+    click(&a,300,245,now+2u); CHECK(!a.ui.mission_page);
+    for (now+=4u;now<6000u;++now) app_step(&a,now);
+    CHECK(strstr(lines[0],"QR") && !bad_layout && app_motor.count==before);
+    puts("PASS: race zone-2 page, missing config reasons, rejected START emits no motor actions, BACK");
+    /* Synthetic task holds its first action. Verify REAL app/UI arbitration. */
+    Mission_Init(&a.mission,port); click(&a,20,40,now);
+    click(&a,20,245,now+2u); CHECK(Mission_IsRunning(&a.mission) && mission_begun==1u);
+    click(&a,20,245,now+4u); CHECK(mission_begun==1u && a.mission.next_id==1u);
+    click(&a,300,245,now+6u); click(&a,20,14,now+8u); CHECK(a.ui.vision_page);
+    click(&a,20,245,now+10u); CHECK(a.vision.state==VISION_IDLE && app_motor.count==before);
+    click(&a,300,245,now+12u); click(&a,300,245,now+14u); CHECK(a.ui.motor_page);
+    click(&a,20,245,now+16u); CHECK(!a.motor.manual && Mission_IsRunning(&a.mission));
+    CHECK(!strcmp(a.motor.message,"RACE BUSY - STOP FIRST"));
+    click(&a,170,245,now+18u); CHECK(a.mission.state==MISSION_ABORTED && mission_cancelled==1u);
+    CHECK(!QrApp_StartMission(&a,now+20u));
+    for (now+=22u;now<8000u;++now) app_step(&a,now);
+    CHECK(mission_begun==1u && !bad_layout);
+    puts("PASS: running race blocks duplicate START/vision/manual actions; global STOP cancels and cannot restart");
+}
 int main(int argc,char **argv)
 {
+    if(argc>1 && !strcmp(argv[1],"mission-screen")) { test_mission_screen(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"vision-screen")) { test_vision_screen(); return 0; }
     if(argc>1 && !strcmp(argv[1],"chassis-active")) { test_chassis_active(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-parallel")) { test_review_parallel(); return 0; }
     if(argc>1 && !strcmp(argv[1],"review-ui")) { test_review_ui(); return 0; }
