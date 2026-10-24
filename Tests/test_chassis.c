@@ -1,7 +1,6 @@
 /* Real MotorBus + incremental wire replies + independent wheel/body plant.
    ALL values here are synthetic; none are vehicle calibration measurements. */
 #include "chassis/chassis.h"
-#include "chassis/chassis_ui.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -279,7 +278,7 @@ static void odometry_tests(void)
 }
 static void fault_evidence_tests(void)
 {
-    Sim s; ChassisFault first; char text[43]; MotorSnapshot *n;
+    Sim s; ChassisFault first; MotorSnapshot *n;
     init(&s); ready(&s);
     CHECK(Chassis_MoveRelative(&s.chassis,300,0,100,s.now)==CHASSIS_ACCEPTED);
     run(&s,200u); n=&s.bus.nodes[2].data;
@@ -290,7 +289,6 @@ static void fault_evidence_tests(void)
     first=s.chassis.data.fault; run(&s,5000u);
     CHECK(s.chassis.data.odometry_valid && s.chassis.data.state==CHASSIS_FAULT);
     CHECK(!memcmp(&first,&s.chassis.data.fault,sizeof(first)));
-    ChassisUi_Line(text,8u,0u,&s.chassis,s.now); CHECK(!strcmp(text,"ODOM INVALID: POSITION JUMP"));
     ready(&s); CHECK(!s.chassis.data.fault.valid);
     puts("PASS: first motor-position fault survives recovery; explicit prepare clears evidence");
 }

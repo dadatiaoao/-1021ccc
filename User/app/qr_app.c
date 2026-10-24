@@ -10,83 +10,16 @@
 #include "./usart/bsp_qr_uart.h"
 #include "./usart/bsp_qr_trigger.h"
 #include "./usart/bsp_motor_uart.h"
-#include "./motor/motor_test_config.h"
 #include "./mechanism/bsp_limit_gpio.h"
-#include <string.h>
+#include "./motor/motor_test_config.h"
 
-/* Explicit manual requests share the existing bus. STOP cancels chassis intent
-   first; diagnostic pages never acquire wheel control. */
-static void manual_action(QrApp *a, QrUiAction action, uint32_t now)
+/* The screen only issues scoped service actions and a global STOP.
+   Old raw motor/manual test menus have been removed. */
+static void stop_all(QrApp *a, uint32_t now)
 {
-    uint8_t address = (uint8_t)(a->ui.selected + 1u);
-    int owns=Chassis_OwnsWheels(&a->chassis);
-    if (action==QR_UI_STOP_ALL || action==QR_UI_STOP_WHEELS || action==QR_UI_STOP_AXIS ||
-        (action==QR_UI_MODE && a->motor.manual)) Mechanism_Stop(&a->mechanism,now);
-    else if (Mechanism_OwnsAxes(&a->mechanism) && (action==QR_UI_MODE || action==QR_UI_RUN)) {
-        a->motor.message="MECHANISM BUSY"; return;
-    }
-    /* Raw RPM/pulse templates cannot bypass calibration, reference or limits. */
-    if (action==QR_UI_RUN && address>=5u && a->ui.test_action<=2u) {
-        a->motor.message="USE MECH: CONFIGURE + HOME/TEST"; return;
-    }
-    if (action==QR_UI_STOP_ALL || action==QR_UI_STOP_WHEELS || (action==QR_UI_MODE && a->motor.manual) ||
-        (action==QR_UI_STOP_AXIS && address<=4u)) Chassis_Stop(&a->chassis,now);
-    else if (owns && (action==QR_UI_MODE || (action==QR_UI_RUN &&
-        (address<=4u || a->ui.test_action>=3u)))) {
-        a->motor.message="CHASSIS BUSY"; return;
-    }
-    if (action == QR_UI_MODE) MotorBus_SetManual(&a->motor, (uint8_t)!a->motor.manual, now);
-    else if (action == QR_UI_STOP_ALL) MotorBus_Stop(&a->motor, MOTOR_ALL, now);
-    else if (action == QR_UI_STOP_WHEELS) MotorBus_Stop(&a->motor, MOTOR_WHEELS, now);
-    else if (action == QR_UI_STOP_AXIS) MotorBus_Stop(&a->motor, (uint8_t)(1u << a->ui.selected), now);
-    else if (action == QR_UI_RUN && a->motor.manual) {
-        if (a->ui.test_action == 0u) { (void)MotorBus_Enable(&a->motor, address, 1u, now); return; }
-#if MOTOR_TEST_CONFIGURED || MOTOR_BENCH_JOG_ENABLED
-        {
-            MotorAction m;
-            memset(&m, 0, sizeof(m));
-            m.lease_ms = MOTOR_TEST_LEASE_MS; m.timeout_ms = MOTOR_TEST_POSITION_TIMEOUT_MS;
-            m.pulses_per_rev = MOTOR_TEST_PULSES_PER_REV;
-#if MOTOR_TEST_CONFIGURED
-            if (a->ui.test_action == 1u) {
-                m.command = Emm_VelocityEx(address, MOTOR_TEST_DIRECTION, MOTOR_TEST_RPM, MOTOR_TEST_ACCELERATION, 0u);
-                (void)MotorBus_Submit(&a->motor, &m, now);
-            } else if (a->ui.test_action == 2u) {
-                if (address < 5u) { a->motor.message = "POSITION: SELECT AXIS 5..7"; return; }
-                m.command = Emm_MoveEx(address, MOTOR_TEST_DIRECTION, MOTOR_TEST_RPM, MOTOR_TEST_ACCELERATION,
-                    MOTOR_TEST_PULSES, MOTOR_TEST_POSITION_MODE, 0u);
-                (void)MotorBus_Submit(&a->motor, &m, now);
-            } else {
-                const int32_t rpm[4] = MOTOR_TEST_WHEEL_RPM;
-                if (a->ui.test_action == 3u) (void)MotorBus_Wheels(&a->motor, rpm, MOTOR_TEST_ACCELERATION, MOTOR_TEST_LEASE_MS, now);
-                else {
-                    MotorAction group[4];
-                    unsigned i;
-                    for (i = 0u; i < 4u; ++i) {
-                        group[i] = m;
-                        group[i].command = Emm_VelocityEx((uint8_t)(i + 1u), (uint8_t)(rpm[i] < 0),
-                            (uint16_t)(rpm[i] < 0 ? -rpm[i] : rpm[i]), MOTOR_TEST_ACCELERATION, 1u);
-                    }
-                    (void)MotorBus_Sync(&a->motor, group, 4u, now);
-                }
-            }
-#else
-            /* Bench jog: an explicit MANUAL + RUN ONCE with a short low-speed
-               lease remains available while MOTOR_TEST_CONFIGURED=0. Position,
-               0xAA wheel group and sync stay gated by MOTOR_TEST_CONFIGURED. */
-            if (a->ui.test_action == 1u) {
-                m.command = Emm_VelocityEx(address, MOTOR_TEST_DIRECTION, MOTOR_TEST_RPM,
-                    MOTOR_TEST_ACCELERATION, 0u);
-                (void)MotorBus_Submit(&a->motor, &m, now);
-            } else {
-                a->motor.message = "CONFIGURE: POSITION/GROUP/SYNC";
-            }
-#endif
-        }
-#else
-        a->motor.message = "CONFIGURE motor_test_config.h";
-#endif
-    }
+    Mechanism_Stop(&a->mechanism,now);
+    Chassis_Stop(&a->chassis,now);
+    MotorBus_Stop(&a->motor,MOTOR_ALL,now);
 }
 
 /* Calibration confirmations gate the one-shot power-on mechanism home. */
@@ -103,9 +36,6 @@ void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
     a->mechanism.chassis=&a->chassis;
     a->chassis.external_busy=&a->mechanism.owned;
     a->ui.mechanism=&a->mechanism;
-#if MECHANISM_TRIAL_RUN
-    a->ui.motor_page=a->ui.mechanism_page=1u; /* show the power-on trial home */
-#endif
 }
 /*
  * 给陀螺校准提供拒绝原因：活动、未知、未确认停止或无已知阻碍。
@@ -172,8 +102,7 @@ void QrApp_Process(QrApp *a, uint32_t now)
         (void)Gyro_RequestCalibration(&a->gyro, now, motor_active(a, now));
     } else if (action == QR_UI_GYRO_ZERO) {
         (void)Gyro_ZeroAngle(&a->gyro, now);
-    } else if (action==QR_UI_MODE || action==QR_UI_RUN || action==QR_UI_STOP_AXIS ||
-        action==QR_UI_STOP_WHEELS || action==QR_UI_STOP_ALL) manual_action(a, action, now);
+    } else if (action==QR_UI_STOP_ALL) stop_all(a,now);
     BspQrTrigger_Poll(now);
     BspQrUart_Pump(&a->qr, now);
     now = AppClock_Now(); /* Capture IRQs/touch I2C can advance SysTick during a step. */

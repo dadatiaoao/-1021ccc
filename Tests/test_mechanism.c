@@ -1,7 +1,6 @@
 /* Synthetic mechanics + real MotorBus/Emm framing and incremental replies.
    None of these distances, signs or scales are vehicle calibration data. */
 #include "mechanism/mechanism.h"
-#include "mechanism/mechanism_ui.h"
 #include "mechanism/bsp_limit_gpio.h"
 #include "stm32f4xx_hal.h"
 #include <math.h>
@@ -177,7 +176,7 @@ static void default_and_gpio(void)
 }
 static void home_and_acceptance(void)
 {
-    Sim s; unsigned a,old; uint32_t id; char line[43]; double start;
+    Sim s; unsigned a,old; uint32_t id; double start;
     init(&s); homed(&s);
     CHECK(s.order[0]==6u && s.order[4]==5u && s.order_count==8u);
     CHECK(s.mech.data.reference[2]==MECH_SESSION_REFERENCE && !s.moves[6]);
@@ -196,8 +195,6 @@ static void home_and_acceptance(void)
     CHECK(s.mech.data.done && s.mech.data.result==MECH_SUCCESS && s.mech.data.stage==8u);
     CHECK(s.moves[6]==4u && s.moves[4]==6u && s.moves[5]==6u);
     start=(double)s.mech.data.origin_counts[2]; NEAR(s.counts[6],start,2.0);
-    for (a=0u;a<4u;++a) { MechanismUi_Line(line,4u,(uint8_t)a,&s.mech,s.now); CHECK(strlen(line)<=42u); }
-    MechanismUi_Line(line,1u,0u,&s.mech,s.now); CHECK(strstr(line,"DONE"));
     old=s.order_count; run(&s,3000u); CHECK(s.order_count==old); /* one round */
     init_at(&s,UINT32_MAX-4000u); homed(&s); CHECK(s.mech.data.reference[2]==MECH_SESSION_REFERENCE);
     init(&s); s.online=0x30u; homed(&s);
@@ -291,7 +288,7 @@ static void fault_tests(void)
 }
 static void trial_tests(void)
 {
-    Sim s; MechanismConfig c; unsigned a; char line[43];
+    Sim s; MechanismConfig c; unsigned a;
     Mechanism_DefaultConfig(&c);
     for (a=0u;a<3u;++a) CHECK(!Mechanism_ConfigIssues(&c,a));
     CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==2.0);
@@ -302,7 +299,6 @@ static void trial_tests(void)
     Mechanism_Init(&s.mech,&s.bus,&c,s.now); s.mech.chassis=&s.chassis;
     homed(&s);
     CHECK(s.order[0]==6u && s.order[4]==5u && !s.moves[6]);
-    MechanismUi_Line(line,0u,0u,&s.mech,s.now); CHECK(strstr(line,"TRIAL"));
     CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_ACCEPTED);
     finish(&s,150000u);
     if (s.mech.data.reason) fprintf(stderr,"TRIAL: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);

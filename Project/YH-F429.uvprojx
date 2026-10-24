@@ -819,11 +819,6 @@
               <FilePath>..\User\app\app_runtime.c</FilePath>
             </File>
             <File>
-              <FileName>motor_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\app\motor_ui.c</FilePath>
-            </File>
-            <File>
               <FileName>emm_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\User\motor\emm_protocol.c</FilePath>
@@ -889,19 +884,9 @@
               <FilePath>..\User\chassis\chassis.c</FilePath>
             </File>
             <File>
-              <FileName>chassis_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\chassis\chassis_ui.c</FilePath>
-            </File>
-            <File>
               <FileName>mechanism.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\User\mechanism\mechanism.c</FilePath>
-            </File>
-            <File>
-              <FileName>mechanism_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\mechanism\mechanism_ui.c</FilePath>
             </File>
             <File>
               <FileName>bsp_limit_gpio.c</FileName>

@@ -45,7 +45,14 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
         if (d->raw_valid) decimal(a,d->raw_dps); else strcpy(a,"--");
         if (d->calibrated) decimal(b,d->bias_dps); else strcpy(b,"--");
         snprintf(t,43,"RAW:%.12s BIAS:%.12s",a,b); break;
-    case 5u: snprintf(t,43,"CAL:%s %lu/%u",Gyro_CalName(d->calibration),(unsigned long)d->cal_count,GYRO_CAL_SAMPLES); break;
+    case 5u:
+#if GYRO_TEMP_FIXED_BIAS_ENABLED
+        if (d->calibrated && d->calibration==GYRO_CAL_NONE) {
+            decimal(a,d->bias_dps);
+            snprintf(t,43,"BIAS:FIXED %.12s / NO REAL CAL",a); break;
+        }
+#endif
+        snprintf(t,43,"CAL:%s %lu/%u",Gyro_CalName(d->calibration),(unsigned long)d->cal_count,GYRO_CAL_SAMPLES); break;
     case 6u: if (!d->have_sample) strcpy(t,"DT:-- AGE:-- ms"); else snprintf(t,43,"DT:%lu AGE:%lu ms",(unsigned long)d->interval_ms,(unsigned long)d->age_ms); break;
     case 7u: snprintf(t,43,"ERR:%s BUS:%u",Gyro_ErrorName(d->error),(unsigned)d->bus_error); break;
     case 8u: strcpy(t,"Relative integral / drifts with time"); break;
