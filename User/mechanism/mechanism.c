@@ -297,10 +297,17 @@ static void prepare(Mechanism *m, uint32_t now)
     for (i=0u;i<4u;++i) {
         MotorNode *w=&m->bus->nodes[i];
         if (!(known_wheels & (1u<<i))) continue;
-        if (busy_node(w) || !healthy(w,now,0u) || w->data.speed_rpm) {
+        if (w->stop_unconfirmed) return;
+        if (busy_node(w) || (MotorBus_Fresh(w,MOTOR_VALID_SPEED,now) && w->data.speed_rpm)) {
             if (!w->stop_unconfirmed) MotorBus_Stop(m->bus,known_wheels,now);
             return;
         }
+        /* During power-on discovery fields arrive separately. Missing position
+           is not evidence of wheel motion; wait for speed/status rather than
+           cancelling their queries with repeated STOP requests. */
+        if (!w->data.online || !MotorBus_Fresh(w,MOTOR_VALID_SPEED,now) ||
+            !MotorBus_Fresh(w,MOTOR_VALID_STATUS,now) || (w->data.status_flags & 12u) ||
+            w->action==MOTOR_UNKNOWN) return;
     }
     if (a!=MECH_TRIM && (!healthy(node(m,0u),now,0u) || !healthy(node(m,1u),now,0u))) return;
     if (m->enable_wait) {

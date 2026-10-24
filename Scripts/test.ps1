@@ -20,7 +20,7 @@ $qrSources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'User\mechani
 $qrArgs = ($qrSources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 # Existing gyro calibration tests use the normal calibration mode.
 # A separate fixed-bias build below covers the shipped application configuration.
-$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe review-ui && qr_tests.exe review-gate && qr_tests.exe chassis-screen && qr_tests.exe mechanism-screen && qr_tests.exe review-parallel && qr_tests.exe chassis-active && qr_tests.exe chassis-no-flow'
+$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /DMECHANISM_TRIAL_RUN=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe review-ui && qr_tests.exe review-gate && qr_tests.exe chassis-screen && qr_tests.exe mechanism-screen && qr_tests.exe review-parallel && qr_tests.exe chassis-active && qr_tests.exe chassis-no-flow'
 & $env:ComSpec /d /s /c $qrCommand
 if ($LASTEXITCODE -ne 0) { throw 'QR host tests failed' }
 $busSources = @('Tests\test_motor_bus.c', 'User\motor\emm_protocol.c', 'User\motor\motor_bus.c') | ForEach-Object { Join-Path $projectRoot $_ }
@@ -46,6 +46,12 @@ $fixedCommand = $qrCommand.Replace('/DGYRO_TEMP_FIXED_BIAS_ENABLED=0', '/DGYRO_T
 $fixedCommand = $fixedCommand.Substring(0, $fixedCommand.IndexOf(' && qr_tests.exe')) + ' && qr_fixed_tests.exe chassis-screen && qr_fixed_tests.exe mechanism-screen && qr_fixed_tests.exe chassis-no-flow'
 & $env:ComSpec /d /s /c $fixedCommand
 if ($LASTEXITCODE -ne 0) { throw 'Default fixed-bias application tests failed' }
+# Keep uncalibrated production gates covered above, then build the actual
+# shipped TRIAL=1 / fixed-gyro profile and verify its automatic startup path.
+$trialAppCommand=$fixedCommand.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:qr_fixed_tests.exe','/Fe:qr_trial_tests.exe')
+$trialAppCommand=$trialAppCommand.Substring(0,$trialAppCommand.IndexOf(' && qr_fixed_tests.exe'))+' && qr_trial_tests.exe trial-boot'
+& $env:ComSpec /d /s /c $trialAppCommand
+if ($LASTEXITCODE -ne 0) { throw 'Shipped trial application tests failed' }
 & (Join-Path $PSScriptRoot "test_chassis.ps1")
 & (Join-Path $PSScriptRoot "test_mechanism.ps1")
 

@@ -934,6 +934,28 @@ static void test_mechanism_screen(void)
     CHECK(!bad_layout); save_image("mechanism_cancelled.pgm");
     puts("PASS: mechanism NC/config/detail screen, one-shot HOME/TEST, boot producer/peer arbitration, parallel QR/flow/UI, raw limit STOP before bus");
 }
+#if MECHANISM_TRIAL_RUN
+static void test_trial_boot(void)
+{
+    QrApp a; unsigned i,before; uint32_t request;
+    CHECK(BspQrUart_Init()); app_fixture(&a,600000u); app_motor.online=MOTOR_ALL;
+    CHECK(a.ui.motor_page && a.ui.mechanism_page);
+    review_advance(&a,4000u);
+    for (i=0u;i<3u;++i) CHECK(!a.mechanism.data.config_issues[i]);
+    if (a.mechanism.data.state!=MECH_FAST_SEEK) fprintf(stderr,"TRIAL BOOT: %s %s axis %u\n",
+        Mechanism_StateName(a.mechanism.data.state),Mechanism_ReasonName(a.mechanism.data.reason),a.mechanism.data.axis);
+    CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_FAST_SEEK);
+    CHECK(a.motor.nodes[5].motion && a.motor.nodes[5].data.command_code==EMM_MOVE);
+    CHECK(strstr(lines[0],"TRIAL") && !bad_layout);
+    request=a.mechanism.data.request_id; review_press(&a,20,245);
+    CHECK(a.mechanism.data.request_id==request && a.mechanism.data.rejection==MECH_AXIS_BUSY);
+    before=app_motor.count; review_press(&a,170,245); review_advance(&a,1500u);
+    CHECK(app_motor.count>before && app_motor.code[before]==EMM_STOP);
+    CHECK(a.mechanism.data.result==MECH_CANCELLED && !a.mechanism.auto_pending && !a.mechanism.owned);
+    save_image("mechanism_trial_boot.pgm");
+    puts("PASS: shipped TRIAL app opens mechanism page, automatically enables/seeks LIFT, repeats rejected, STOP cancels without retry");
+}
+#endif
 static void test_chassis_active(void)
 {
     QrApp a; ChassisConfig cfg; uint32_t start,next_command,next_scan,cleared,zeros,requests;
@@ -989,6 +1011,9 @@ int main(int argc,char **argv)
     if(argc>1 && !strcmp(argv[1],"review-gate")) { test_review_gate(); return 0; }
     if(argc>1 && !strcmp(argv[1],"chassis-screen")) { test_chassis_screen(); return 0; }
     if(argc>1 && !strcmp(argv[1],"mechanism-screen")) { test_mechanism_screen(); return 0; }
+#if MECHANISM_TRIAL_RUN
+    if(argc>1 && !strcmp(argv[1],"trial-boot")) { test_trial_boot(); return 0; }
+#endif
     if(argc>1) {
         QrService s;
         if(!strcmp(argv[1],"init")) init_fail=1;

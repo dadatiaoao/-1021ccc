@@ -21,7 +21,7 @@ void MechanismUi_Line(char out[43], unsigned row, uint8_t detail, const Mechanis
     char value[20],target[20];
     static const char * const refs[]={"NO ZERO","HOMED","SESSION"};
     static const char * const results[]={"NONE","RUNNING","SUCCESS","FAILED","CANCELLED"};
-    if (row==0u) snprintf(out,43,"MECH %s [tap]",detail ? MotorBus_Role((uint8_t)(a+5u)) : "ALL");
+    if (row==0u) snprintf(out,43,"MECH %s%s [tap]",MECHANISM_TRIAL_RUN ? "TRIAL " : "",detail ? MotorBus_Role((uint8_t)(a+5u)) : "ALL");
     else if (row==1u && d->homing && d->result==MECH_RUNNING) snprintf(out,43,"%s HOMING",MotorBus_Role((uint8_t)(d->axis+5u)));
     else if (row==1u && d->homing && d->result==MECH_SUCCESS) snprintf(out,43,"HOME READY TRIM:%s",d->trim_ready ? "SESSION ZERO" : "NOT READY");
     else if (row==1u) snprintf(out,43,"%s %s %u/8",MotorBus_Role((uint8_t)(d->axis+5u)),d->done ? "DONE" : results[d->result],d->stage);
@@ -49,4 +49,6 @@ void MechanismUi_Line(char out[43], unsigned row, uint8_t detail, const Mechanis
     else snprintf(out,43,"%s",Mechanism_ReasonName(d->reason!=MECH_OK ? d->reason :
         d->rejection!=MECH_OK ? d->rejection : (d->config_issues[0] || d->config_issues[1]) ? MECH_CONFIG :
         !d->trim_ready ? MECH_REFERENCE : MECH_OK));
+    if (row==8u && MECHANISM_TRIAL_RUN && d->reason==MECH_OK && d->rejection==MECH_OK && d->trim_ready)
+        snprintf(out,43,"TRIAL: UNCALIBRATED PARAMETERS");
 }

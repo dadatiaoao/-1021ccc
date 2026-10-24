@@ -289,8 +289,30 @@ static void fault_tests(void)
     CHECK(s.mech.data.result==MECH_FAILED);
     puts("PASS: pressed boot, open/short/bounce, raw STOP, lost STOP retry, no stop bypass, gaps, enable/offline/ACK/stale/protection/stall failures");
 }
-int main(void)
+static void trial_tests(void)
 {
+    Sim s; MechanismConfig c; unsigned a; char line[43];
+    Mechanism_DefaultConfig(&c);
+    for (a=0u;a<3u;++a) CHECK(!Mechanism_ConfigIssues(&c,a));
+    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==2.0);
+    init(&s); s.cfg=c;
+    s.counts[4]= -2.0*65536.0/c.axis[0].units_per_rev;
+    s.counts[5]=0.3*65536.0/c.axis[1].units_per_rev;
+    s.counts[6]=8.0*65536.0/c.axis[2].units_per_rev;
+    Mechanism_Init(&s.mech,&s.bus,&c,s.now); s.mech.chassis=&s.chassis;
+    homed(&s);
+    CHECK(s.order[0]==6u && s.order[4]==5u && !s.moves[6]);
+    MechanismUi_Line(line,0u,0u,&s.mech,s.now); CHECK(strstr(line,"TRIAL"));
+    CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_ACCEPTED);
+    finish(&s,150000u);
+    if (s.mech.data.reason) fprintf(stderr,"TRIAL: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
+    CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.done && s.mech.data.stage==8u);
+    CHECK(s.moves[6]==4u && s.flags[5]&1u);
+    puts("TRIAL CONFIG PASS: shipped 120deg/2mm/3200 profile, power-on 6->5 home, session zero, all eight stages (synthetic mechanics only)");
+}
+int main(int argc, char **argv)
+{
+    if (argc>1 && !strcmp(argv[1],"trial")) { trial_tests(); return 0; }
     default_and_gpio(); home_and_acceptance(); conversion_and_gates(); fault_tests();
     printf("MECHANISM PASS (%u checks), sizeof(Mechanism)=%zu\n",checks,sizeof(Mechanism)); return 0;
 }

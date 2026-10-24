@@ -11,7 +11,10 @@ foreach ($module in 'mechanism','chassis') {
 }
 $sourceArgs=($sources | ForEach-Object { '"'+$_+'"' }) -join ' '
 foreach ($strict in 0,1) {
-    $command='call "'+$vcvars+'" >nul && cd /d "'+$testOutput+'" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DMOTOR_DRIVER_REQUIRE_MANUAL='+$strict+' /I"'+(Join-Path $projectRoot 'Tests\stubs')+'" /I"'+(Join-Path $projectRoot 'User')+'" '+$sourceArgs+' /Fe:mechanism_tests.exe && mechanism_tests.exe'
+    $command='call "'+$vcvars+'" >nul && cd /d "'+$testOutput+'" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DMECHANISM_TRIAL_RUN=0 /DMOTOR_DRIVER_REQUIRE_MANUAL='+$strict+' /I"'+(Join-Path $projectRoot 'Tests\stubs')+'" /I"'+(Join-Path $projectRoot 'User')+'" '+$sourceArgs+' /Fe:mechanism_tests.exe && mechanism_tests.exe'
     & $env:ComSpec /d /s /c $command
     if ($LASTEXITCODE -ne 0) { throw 'Mechanism tests failed' }
 }
+$trialCommand=$command.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:mechanism_tests.exe','/Fe:mechanism_trial_tests.exe').Replace('&& mechanism_tests.exe','&& mechanism_trial_tests.exe trial')
+& $env:ComSpec /d /s /c $trialCommand
+if ($LASTEXITCODE -ne 0) { throw 'Trial mechanism profile tests failed' }

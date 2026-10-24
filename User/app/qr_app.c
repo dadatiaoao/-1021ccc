@@ -103,6 +103,9 @@ void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
     a->mechanism.chassis=&a->chassis;
     a->chassis.external_busy=&a->mechanism.owned;
     a->ui.mechanism=&a->mechanism;
+#if MECHANISM_TRIAL_RUN
+    a->ui.motor_page=a->ui.mechanism_page=1u; /* show the power-on trial home */
+#endif
 }
 /*
  * 给陀螺校准提供拒绝原因：活动、未知、未确认停止或无已知阻碍。
