@@ -91,6 +91,9 @@ void MotorBus_TransportError(MotorBus *b, MotorError error, uint32_t now);
 void MotorBus_SetManual(MotorBus *b, uint8_t manual, uint32_t now);
 int MotorBus_Enable(MotorBus *b, uint8_t address, uint8_t enabled, uint32_t now);
 int MotorBus_Submit(MotorBus *b, const MotorAction *action, uint32_t now);
+/* Extend only the matching active velocity request; never starts/reverses motion. */
+int MotorBus_RenewVelocity(MotorBus *b, uint8_t address, uint32_t request_id,
+                          uint32_t lease_ms, uint32_t now);
 int MotorBus_Wheels(MotorBus *b, const int32_t rpm[4], uint8_t acceleration,
                     uint32_t lease_ms, uint32_t now);
 int MotorBus_Sync(MotorBus *b, const MotorAction *actions, uint8_t count, uint32_t now);

@@ -8,6 +8,14 @@
 #ifndef MECHANISM_TRIAL_RUN
 #define MECHANISM_TRIAL_RUN 1
 #endif
+/* Temporary measurement firmware: wait for an explicit START at the bottom.
+ * Set to 0 after measuring to restore the normal one-shot power-on HOME. */
+#ifndef MECHANISM_LIFT_CALIBRATION_MODE
+#define MECHANISM_LIFT_CALIBRATION_MODE MECHANISM_TRIAL_RUN
+#endif
+#define MECHANISM_LIFT_CAL_RPM 10u
+#define MECHANISM_LIFT_CAL_TIMEOUT_MS 120000u
+#define MECHANISM_LIFT_CAL_MAX_COUNTS (INT64_C(20)*65536)
 typedef struct {
     double units_per_rev; /* ARM degrees; LIFT/TRIM mm, per MOTOR revolution */
     uint32_t pulses_per_rev;
@@ -32,10 +40,13 @@ typedef struct {
    slow seek, clearance, fast RPM, slow RPM, wiring confirmed, home confirmed.
    Finally: measured outside angle/top/work windows, requested test amplitudes,
    prepare/stable/between milliseconds. */
-/* Trial ASSUMPTIONS, not measurements: 3200 command pulses/motor revolution;
-   protocol positive = ARM out / LIFT down / TRIM forward. Verify actual motion.
-   1:3 ARM reduction -> 120 deg/motor revolution. LIFT and TRIM temporarily use
-   2 mm/motor revolution; screw type alone does NOT establish its actual lead. */
+/* User confirmed 2026-10-25: ARM timing-pulley reduction is 1:3, hence
+   120 deg/motor revolution; home is parallel to the chassis side, work is
+   perpendicular (90 deg). ARM inward and LIFT upward homing directions work.
+   LIFT uses a timing belt with no reduction and 150 mm physical travel.
+   Its mm/motor revolution remains unknown: retain the 2 mm trial scale and
+   10 mm command cap until pulley pitch/teeth or measured travel/rev is known.
+   3200 command pulses/rev, TRIM scale and TRIM direction remain assumptions. */
 #define MECHANISM_LIFT_PREVIEW_MM_PER_REV 2.0
 #define MECHANISM_TRIAL_PULSES_PER_REV 3200u
 #define MECHANISM_TRIAL_ARM_SIGN 1
@@ -47,11 +58,11 @@ typedef struct {
    search bounds are ARM 10 deg / LIFT 2 mm (in these assumed units).
    Software ranges are trial command caps, not measured mechanical end stops. */
 #define MECHANISM_CALIBRATION { \
-    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,3.0f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
+    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,4.0f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
      {MECHANISM_LIFT_PREVIEW_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,15.0f,0.5f,MECHANISM_TRIAL_LIFT_SIGN,1u,100u}, \
      {2.0,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,15.0f,0.5f,MECHANISM_TRIAL_TRIM_SIGN,1u,100u}}, \
-    {{90.0f,3.0f,10.0f,2.0f,4.0f,2.0f,2.0f,1.0f,1u,1u}, \
-     {10.0f,0.5f,2.0f,0.2f,0.4f,0.2f,5.0f,2.0f,1u,1u}}, \
+    {{90.0f,3.0f,10.0f,2.0f,4.0f,2.0f,4.0f,2.0f,1u,1u}, \
+     {10.0f,0.5f,2.0f,0.2f,0.4f,0.2f,10.0f,4.0f,1u,1u}}, \
     90.0f,0.1f,2.0f,5.0f,5.0f,10000u,100u,500u }
 #else
 #define MECHANISM_CALIBRATION { \

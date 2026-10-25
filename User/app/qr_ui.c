@@ -62,7 +62,9 @@ QrUiAction QrUi_Touch(QrUi *u,int32_t x,int32_t y,uint8_t down)
         if (hit(x,y,8,44,464,22)) { u->axis=(uint8_t)((u->axis+1u)%3u); u->redraw=1u; }
         else if (hit(x,y,8,196,140,30)) return QR_UI_MECH_HOME;
         else if (hit(x,y,160,196,140,30)) return QR_UI_MECH_TEST;
-    } else if (u->page==UI_CHASSIS && u->more && hit(x,y,8,196,216,30)) return QR_UI_CHASSIS_START;
+        else if (hit(x,y,312,196,160,30)) open_page(u,UI_LIFT_CAL);
+    } else if (u->page==UI_LIFT_CAL && hit(x,y,8,196,216,30)) return QR_UI_LIFT_MEASURE;
+    else if (u->page==UI_CHASSIS && u->more && hit(x,y,8,196,216,30)) return QR_UI_CHASSIS_START;
     else if (u->page==UI_GYRO && !u->more && hit(x,y,8,196,140,30)) return QR_UI_GYRO_CAL;
     else if (u->page==UI_GYRO && !u->more && hit(x,y,160,196,140,30)) return QR_UI_GYRO_ZERO;
     else if (u->page==UI_QR && !u->more && hit(x,y,8,196,216,30)) return QR_UI_RESCAN;
@@ -238,6 +240,20 @@ static void mechanism(QrUi *u,uint32_t now)
     snprintf(t,sizeof(t),"%s STOP:%s",Mechanism_ReasonName(d->reason!=MECH_OK ? d->reason : d->rejection),d->stop_pending ? "UNCONF" : "OK"); row(u,4u,t);
     row(u,5u,MECHANISM_TRIAL_RUN ? /* TRIAL: 临时参数 */ "TRIAL: \344\270\264\346\227\266\345\217\202\346\225\260" : /* 动作仍受标定与限位门控 */ "\345\212\250\344\275\234\344\273\215\345\217\227\346\240\207\345\256\232\344\270\216\351\231\220\344\275\215\351\227\250\346\216\247");
     (void)item(u,8,196,140,30,1,/* 重新回零 */ "\351\207\215\346\226\260\345\233\236\351\233\266"); (void)item(u,160,196,140,30,1,/* 机构验收 */ "\346\234\272\346\236\204\351\252\214\346\224\266");
+    (void)item(u,312,196,160,30,1,"LIFT CAL");
+}
+static void lift_calibration(QrUi *u)
+{
+    const Mechanism *m=u->mechanism; char t[UI_TEXT_BYTES];
+    static const char * const result[]={"READY","RUNNING","DONE","FAILED","CANCELLED"};
+    if (!m) { row(u,0u,"UNAVAILABLE"); return; }
+    snprintf(t,sizeof(t),"LIFT CAL: %s",result[m->data.lift_measure_result]); row(u,0u,t);
+    snprintf(t,sizeof(t),"COUNTS: %lld",(long long)m->data.lift_measure_counts); row(u,1u,t);
+    row(u,2u,m->data.lift_measure_result==MECH_SUCCESS ? "Record COUNTS; reset to bottom." : "Place at bottom, then START.");
+    snprintf(t,sizeof(t),"TOP:%s / %u RPM / MAX 120s",m->data.limit[1].raw ? "ON" : "OFF",MECHANISM_LIFT_CAL_RPM); row(u,3u,t);
+    row(u,4u,Mechanism_ReasonName(m->data.reason!=MECH_OK ? m->data.reason : m->data.rejection));
+    row(u,5u,"150mm / (average COUNTS / 65536)");
+    (void)item(u,8,196,216,30,1,"START LIFT");
 }
 static void limits(QrUi *u,uint32_t now)
 {
@@ -259,7 +275,7 @@ static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,const FlowSnap
     const GyroSnapshot *g,uint32_t now)
 {
     unsigned i; char t[43]; u->count=0u;
-    (void)item(u,8,4,384,32,0,titles[u->page]);
+    (void)item(u,8,4,384,32,0,u->page==UI_LIFT_CAL ? "LIFT CALIBRATION" : titles[u->page]);
     switch (u->page) {
     case UI_HOME: home(u,q,b,f,g,now); break;
     case UI_MOTOR: motors(u,b,now); break;
@@ -267,6 +283,7 @@ static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,const FlowSnap
     case UI_CHASSIS: chassis(u,now); break;
     case UI_MECHANISM: mechanism(u,now); break;
     case UI_LIMITS: limits(u,now); break;
+    case UI_LIFT_CAL: lift_calibration(u); break;
     case UI_VISION:
         row(u,0u,/* K230: 通信协议尚未实现 */ "K230: \351\200\232\344\277\241\345\215\217\350\256\256\345\260\232\346\234\252\345\256\236\347\216\260"); row(u,1u,"READY / START: NOT IMPLEMENTED");
         row(u,2u,/* 当前无任务阶段与视觉坐标回传 */ "\345\275\223\345\211\215\346\227\240\344\273\273\345\212\241\351\230\266\346\256\265\344\270\216\350\247\206\350\247\211\345\235\220\346\240\207\345\233\236\344\274\240");

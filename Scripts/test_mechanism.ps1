@@ -15,6 +15,6 @@ foreach ($strict in 0,1) {
     & $env:ComSpec /d /s /c $command
     if ($LASTEXITCODE -ne 0) { throw 'Mechanism tests failed' }
 }
-$trialCommand=$command.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:mechanism_tests.exe','/Fe:mechanism_trial_tests.exe').Replace('&& mechanism_tests.exe','&& mechanism_trial_tests.exe trial')
+$trialCommand=$command.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:mechanism_tests.exe','/Fe:mechanism_trial_tests.exe').Replace('&& mechanism_tests.exe','&& mechanism_trial_tests.exe trial && mechanism_trial_tests.exe measure')
 & $env:ComSpec /d /s /c $trialCommand
 if ($LASTEXITCODE -ne 0) { throw 'Trial mechanism profile tests failed' }

@@ -4,7 +4,7 @@
 #include <float.h>
 #include <string.h>
 
-enum { OP_NONE, OP_HOME, OP_MOVE, OP_TEST };
+enum { OP_NONE, OP_HOME, OP_MOVE, OP_TEST, OP_MEASURE };
 static int finite_number(double v) { return v==v && v<=DBL_MAX && v>=-DBL_MAX; }
 static int positive(double v) { return finite_number(v) && v>0.0; }
 static int due(uint32_t now, uint32_t at) { return (int32_t)(now-at)>=0; }
@@ -92,6 +92,7 @@ static void begin(Mechanism *m, uint8_t op, uint32_t now)
 }
 static void fail(Mechanism *m, MechanismReason why, uint32_t now)
 {
+    if (m->data.lift_measure_result==MECH_RUNNING) m->data.lift_measure_result=MECH_FAILED;
     if (m->data.reason==MECH_OK) m->data.reason=why; /* first failure survives recovery */
     if (why==MECH_FEEDBACK || why==MECH_DRIVER_FAULT || why==MECH_LIMIT || why==MECH_SAMPLE_GAP ||
         why==MECH_ENABLE_FAILED || why==MECH_FINAL_ERROR || why==MECH_BUS_REJECTED || why==MECH_TIMEOUT)
@@ -107,7 +108,7 @@ void Mechanism_Init(Mechanism *m, MotorBus *b, const MechanismConfig *c, uint32_
     memset(m,0,sizeof(*m)); m->bus=b;
     if (c) m->config=*c; else Mechanism_DefaultConfig(&m->config);
     for (a=0u;a<3u;++a) m->data.config_issues[a]=Mechanism_ConfigIssues(&m->config,a);
-    m->auto_pending=1u; m->last_sample_ms=now;
+    m->auto_pending=(uint8_t)!MECHANISM_LIFT_CALIBRATION_MODE; m->last_sample_ms=now;
 }
 void Mechanism_SampleLimits(Mechanism *m, uint8_t arm, uint8_t lift, uint32_t now)
 {
@@ -241,8 +242,36 @@ MechanismRequestResult Mechanism_StartAcceptance(Mechanism *m, uint32_t now)
     m->data.state=MECH_BETWEEN; m->deadline=now;
     return MECH_ACCEPTED;
 }
+MechanismRequestResult Mechanism_MeasureLift(Mechanism *m, uint32_t now)
+{
+    unsigned a;
+    const MechanismAxisConfig *c=&m->config.axis[MECH_LIFT];
+    if (m->owned || peer_busy(m)) return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
+    if (stops_pending(m)) return reject(m,MECH_NOT_READY,MECH_STOP_UNCONFIRMED);
+    /* No mm/rev, pulse/rev or position-reference dependency for this operation. */
+    if ((c->positive_sign!=1 && c->positive_sign!=-1) || !c->calibrated ||
+        !m->config.home[MECH_LIFT].wiring_confirmed ||
+        !m->config.stable_ms || m->config.stable_ms>1000u ||
+        m->config.prepare_ms<100u || m->config.prepare_ms>60000u ||
+        !positive(c->max_rpm) || c->max_rpm<MECHANISM_LIFT_CAL_RPM)
+        return reject(m,MECH_INVALID,MECH_CONFIG);
+    if (now-m->last_sample_ms>10u || !m->data.limit[1].valid)
+        return reject(m,MECH_NOT_READY,MECH_SAMPLE_GAP);
+    if (m->data.limit[1].raw || m->data.limit[1].stable)
+        return reject(m,MECH_NOT_READY,MECH_LIMIT);
+    if (!healthy(node(m,MECH_LIFT),now,0u)) return reject(m,MECH_NOT_READY,MECH_FEEDBACK);
+    for (a=0u;a<3u;++a) if (busy_node(node(m,a)) ||
+        (MotorBus_Fresh(node(m,a),MOTOR_VALID_SPEED,now) && node(m,a)->data.speed_rpm))
+        return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
+    begin(m,OP_MEASURE,now); m->auto_pending=0u;
+    for (a=0u;a<3u;++a) m->data.reference[a]=MECH_UNREFERENCED;
+    m->data.lift_measure_result=MECH_RUNNING; m->data.lift_measure_counts=0;
+    m->data.axis=MECH_LIFT; m->data.state=MECH_PREPARE;
+    return MECH_ACCEPTED;
+}
 void Mechanism_Stop(Mechanism *m, uint32_t now)
 {
+    if (m->data.lift_measure_result==MECH_RUNNING) m->data.lift_measure_result=MECH_CANCELLED;
     m->auto_pending=0u; /* a STOP never schedules a later automatic retry */
     if (m->data.state==MECH_STOPPING || m->data.state==MECH_FAULT) return;
     m->data.rejection=MECH_OK;
@@ -309,7 +338,9 @@ static void prepare(Mechanism *m, uint32_t now)
             !MotorBus_Fresh(w,MOTOR_VALID_STATUS,now) || (w->data.status_flags & 12u) ||
             w->action==MOTOR_UNKNOWN) return;
     }
-    if (a!=MECH_TRIM && (!healthy(node(m,0u),now,0u) || !healthy(node(m,1u),now,0u))) return;
+    if (m->operation==OP_MEASURE && m->data.limit[1].raw) { fail(m,MECH_LIMIT,now); return; }
+    if (m->operation!=OP_MEASURE && a!=MECH_TRIM &&
+        (!healthy(node(m,0u),now,0u) || !healthy(node(m,1u),now,0u))) return;
     if (m->enable_wait) {
         if (n->request_id!=m->segment_request || n->action==MOTOR_REJECTED || n->action==MOTOR_UNKNOWN || n->stop_unconfirmed) {
             fail(m,MECH_ENABLE_FAILED,now); return;
@@ -329,10 +360,61 @@ static void prepare(Mechanism *m, uint32_t now)
         return;
     }
     if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
-    if (a==MECH_TRIM) {
+    if (m->operation==OP_MEASURE) {
+        m->data.lift_measure_start=n->data.position_counts;
+        next_step(m,MECH_LIFT_MEASURE,now);
+        m->deadline=now+MECHANISM_LIFT_CAL_TIMEOUT_MS; m->measure_refresh_ms=now;
+    } else if (a==MECH_TRIM) {
         m->data.origin_counts[a]=n->data.position_counts; m->data.reference[a]=MECH_SESSION_REFERENCE;
         m->data.trim_ready=1u; complete(m);
     } else next_step(m,MECH_CHECK,now);
+}
+static void measure_lift(Mechanism *m, uint32_t now)
+{
+    MotorNode *n=node(m,MECH_LIFT);
+    MechanismLimit *l=&m->data.limit[1];
+    int64_t counts=(m->data.lift_measure_start-n->data.position_counts)*m->config.axis[1].positive_sign;
+    m->data.lift_measure_counts=counts;
+    if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
+    if (m->segment==2u) {
+        if (now-m->trigger_at>=200u && (!l->valid || !l->stable)) { fail(m,MECH_LIMIT_UNSTABLE,now); return; }
+        if (n->stop_unconfirmed) {
+            if (now-m->stop_at>=3000u) fail(m,MECH_STOP_UNCONFIRMED,now);
+            return;
+        }
+        if (!l->valid || !l->stable || !settled(m,n,now) || !new_position_after(m,n,now)) return;
+        if (counts<=0 || counts>MECHANISM_LIFT_CAL_MAX_COUNTS) { fail(m,MECH_BAD_REQUEST,now); return; }
+        m->data.stop_pending=0u; m->data.lift_measure_result=MECH_SUCCESS;
+        complete(m); return;
+    }
+    /* Raw limit wins over renewals. Never send a new velocity after this latch. */
+    if (l->raw) {
+        m->trigger_at=m->stop_at=now; m->data.stop_pending=1u;
+        m->touched|=axis_bit(MECH_LIFT); m->segment=2u;
+        m->stable=m->waiting_position=0u;
+        MotorBus_Stop(m->bus,axis_bit(MECH_LIFT),now); return;
+    }
+    if (counts< -655 || counts>=MECHANISM_LIFT_CAL_MAX_COUNTS) { fail(m,MECH_NOT_FOUND,now); return; }
+    if (m->segment && (n->request_id!=m->segment_request || n->action==MOTOR_CANCELLED)) {
+        fail(m,MECH_BUS_REJECTED,now); return;
+    }
+    if (due(now,m->measure_refresh_ms)) {
+        MotorAction action;
+        /* Let an existing request finish its ACK before refreshing the lease. */
+        if (m->segment && (n->action==MOTOR_QUEUED || n->action==MOTOR_SENT)) return;
+        if (m->segment) {
+            if (!MotorBus_RenewVelocity(m->bus,6u,m->segment_request,3000u,now)) {
+                fail(m,MECH_BUS_REJECTED,now); return;
+            }
+            m->measure_refresh_ms=now+1000u; return;
+        }
+        memset(&action,0,sizeof(action)); action.lease_ms=3000u;
+        action.command=Emm_VelocityEx(6u,(uint8_t)(m->config.axis[1].positive_sign>0),
+            MECHANISM_LIFT_CAL_RPM,m->config.axis[1].acceleration,0u);
+        if (!MotorBus_Submit(m->bus,&action,now)) { fail(m,MECH_BUS_REJECTED,now); return; }
+        m->segment_request=n->request_id; m->segment=1u; m->touched|=axis_bit(MECH_LIFT);
+        m->measure_refresh_ms=now+1000u;
+    }
 }
 static void home_process(Mechanism *m, uint32_t now)
 {
@@ -453,9 +535,10 @@ void Mechanism_Process(Mechanism *m, uint32_t now)
     if (m->data.state==MECH_PREPARE) { prepare(m,now); return; }
     a=m->data.axis; n=node(m,a);
     if (a==MECH_ARM && interlock(m,a,m->data.target,now)!=MECH_OK) { fail(m,MECH_INTERLOCK,now); return; }
-    if (!healthy(n,now,1u) && !(m->operation==OP_HOME && m->segment==2u && n->stop_unconfirmed)) {
+    if (!healthy(n,now,1u) && !((m->operation==OP_HOME || m->operation==OP_MEASURE) && m->segment==2u && n->stop_unconfirmed)) {
         fail(m,motor_reason(n),now); return;
     }
+    if (m->operation==OP_MEASURE) { measure_lift(m,now); return; }
     if (m->operation==OP_HOME) { home_process(m,now); return; }
     if (m->data.state==MECH_BETWEEN) { if (due(now,m->deadline)) test_next(m,now); return; }
     if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
@@ -472,7 +555,7 @@ void Mechanism_GetSnapshot(const Mechanism *m, MechanismSnapshot *out) { if (out
 const char *Mechanism_StateName(MechanismState s)
 {
     static const char * const names[]={"IDLE","PREPARE","CHECK","INITIAL RELEASE","FAST SEEK","BACKOFF",
-        "SLOW SEEK","PARK RELEASE","MOVING","BETWEEN","STOPPING","FAULT"};
+        "SLOW SEEK","PARK RELEASE","MOVING","BETWEEN","STOPPING","FAULT","LIFT MEASURE"};
     return (unsigned)s<sizeof(names)/sizeof(names[0]) ? names[s] : "?";
 }
 const char *Mechanism_ReasonName(MechanismReason r)

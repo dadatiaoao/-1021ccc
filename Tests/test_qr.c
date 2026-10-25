@@ -525,7 +525,7 @@ static void test_dashboard(void)
 static void render_pages(void)
 {
     QrApp a; FlowSnapshot f={0}; GyroSnapshot g={0}; unsigned page,more,i;
-    static const char * const names[]={"home","motor","gyro","qr","flow","vision","chassis","arm","limits"};
+    static const char * const names[]={"home","motor","gyro","qr","flow","vision","chassis","arm","limits","lift_cal"};
     app_fixture(&a,200000u); receive(&a.qr,"156+123+516+231\r",tick);
     a.mechanism.auto_pending=0u;
     for(i=0u;i<7u;++i) {
@@ -543,7 +543,7 @@ static void render_pages(void)
     a.mechanism.data.position[0]=45.25; a.mechanism.data.position[1]=12.5; a.mechanism.data.position[2]=-1.25;
     a.mechanism.data.limit[0].valid=a.mechanism.data.limit[1].valid=1u;
     a.mechanism.data.limit[0].raw=a.mechanism.data.limit[0].stable=1u;
-    for(page=0u;page<=UI_LIMITS;++page) for(more=0u;more<2u;++more) {
+    for(page=0u;page<=UI_LIFT_CAL;++page) for(more=0u;more<2u;++more) {
         char name[64]; a.ui.page=(uint8_t)page; a.ui.more=(uint8_t)more; a.ui.redraw=1;
         finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
         snprintf(name,sizeof(name),"ui_%s%s.pgm",names[page],more ? "_more" : ""); save_image(name);
@@ -552,6 +552,16 @@ static void render_pages(void)
         /* White button interiors and black margins are rotated in framebuffer. */
         CHECK(pixels[271-232][479-8]==255u && pixels[0][0]==0u);
     }
+    a.ui.page=UI_LIFT_CAL; a.ui.more=0; a.ui.redraw=1;
+    a.mechanism.data.lift_measure_result=MECH_SUCCESS;
+    a.mechanism.data.lift_measure_counts=196608;
+    a.mechanism.data.limit[1].raw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"DONE") && contains(&a.ui,"COUNTS: 196608"));
+    save_image("ui_lift_cal_done.pgm");
+    a.mechanism.data.lift_measure_result=MECH_FAILED; a.ui.redraw=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"FAILED"));
     a.ui.page=UI_HOME; a.ui.more=0; a.ui.redraw=1;
     a.mechanism.owned=1; a.mechanism.data.homing=1;
     finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); CHECK(contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
@@ -567,7 +577,7 @@ static void render_pages(void)
     a.motor.nodes[0].data.position_counts=INT64_MIN;
     a.motor.nodes[0].data.rx_count=a.motor.nodes[0].data.timeouts=UINT32_MAX;
     finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
-    CHECK(!bad_layout); puts("PASS: rendered all 18 page variants, bounds, extreme counts, phase priority and invalid coordinates");
+    CHECK(!bad_layout); puts("PASS: rendered all 20 page variants and measurement results, bounds, extreme counts, phase priority and invalid coordinates");
 }
 static void gyro_ready(QrApp *a)
 {
@@ -653,6 +663,24 @@ static void test_trial_boot(void)
 {
     QrApp a; uint32_t request;
     CHECK(BspQrUart_Init()); app_fixture(&a,500000u); app_motor.online=MOTOR_ALL;
+#if MECHANISM_LIFT_CALIBRATION_MODE
+    CHECK(a.ui.page==UI_LIFT_CAL); advance(&a,4000u);
+    CHECK(!a.mechanism.auto_pending && !app_motor.count);
+    CHECK(contains(&a.ui,"START LIFT") && contains(&a.ui,"READY"));
+    press(&a,40,210); advance(&a,4000u);
+    CHECK(a.mechanism.data.state==MECH_LIFT_MEASURE && a.motor.nodes[5].motion);
+    CHECK(a.motor.nodes[5].data.command_code==EMM_VELOCITY && app_motor.rpm[5]==-10);
+    request=a.mechanism.data.request_id; press(&a,40,210);
+    CHECK(a.mechanism.data.request_id==request && a.mechanism.data.rejection==MECH_AXIS_BUSY);
+    CHECK(contains(&a.ui,"RUNNING")); validate_widgets(&a.ui); save_image("ui_lift_cal_running.pgm");
+    press(&a,240,248); press(&a,420,18); press(&a,350,210);
+    CHECK(a.ui.page==UI_LIFT_CAL && a.mechanism.data.request_id==request);
+    press(&a,420,248); advance(&a,1500u);
+    CHECK(a.mechanism.data.lift_measure_result==MECH_CANCELLED && !a.mechanism.owned);
+    CHECK(!a.mechanism.auto_pending && !app_motor.rpm[5]);
+    CHECK(contains(&a.ui,"CANCELLED")); validate_widgets(&a.ui); save_image("ui_lift_cal_cancelled.pgm");
+    puts("PASS: measurement firmware waits at boot, START drives only lift, duplicate rejected, navigation preserves run, STOP cancels");
+#else
     CHECK(a.ui.page==UI_HOME); advance(&a,4000u);
     CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_FAST_SEEK);
     CHECK(a.motor.nodes[5].motion && contains(&a.ui,"TRIAL") && contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
@@ -662,6 +690,7 @@ static void test_trial_boot(void)
     press(&a,420,248); advance(&a,1500u);
     CHECK(a.mechanism.data.result==MECH_CANCELLED && !a.mechanism.auto_pending && !a.mechanism.owned);
     CHECK(!bad_layout); puts("PASS: shipped TRIAL boots to dashboard, auto-homes lift, busy HOME rejected, STOP cancels");
+#endif
 }
 #endif
 int main(int argc,char **argv)
