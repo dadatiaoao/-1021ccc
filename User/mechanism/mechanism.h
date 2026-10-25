@@ -9,8 +9,7 @@ typedef enum { MECH_NONE, MECH_RUNNING, MECH_SUCCESS, MECH_FAILED, MECH_CANCELLE
 typedef enum { MECH_UNREFERENCED, MECH_HOMED, MECH_SESSION_REFERENCE } MechanismReference;
 typedef enum { MECH_IDLE, MECH_PREPARE, MECH_CHECK, MECH_INITIAL_RELEASE,
     MECH_FAST_SEEK, MECH_BACKOFF, MECH_SLOW_SEEK, MECH_PARK_RELEASE,
-    MECH_MOVING, MECH_BETWEEN, MECH_STOPPING, MECH_FAULT,
-    MECH_LIFT_MEASURE } MechanismState;
+    MECH_MOVING, MECH_BETWEEN, MECH_STOPPING, MECH_FAULT } MechanismState;
 typedef enum { MECH_OK, MECH_CONFIG, MECH_FEEDBACK, MECH_AXIS_BUSY,
     MECH_INTERLOCK, MECH_ENABLE_FAILED, MECH_TIMEOUT, MECH_BUS_REJECTED,
     MECH_LIMIT, MECH_LIMIT_UNSTABLE, MECH_SAMPLE_GAP, MECH_NOT_FOUND,
@@ -23,8 +22,6 @@ typedef struct {
 typedef struct {
     MechanismState state;
     MechanismResult result;
-    MechanismResult lift_measure_result;
-    int64_t lift_measure_start, lift_measure_counts;
     MechanismReason reason, rejection;
     MechanismReference reference[3];
     MechanismLimit limit[2];
@@ -42,7 +39,6 @@ typedef struct {
     MechanismSnapshot data;
     uint32_t last_sample_ms, deadline, stable_since, position_seq, wait_position_ms;
     uint32_t segment_request, trigger_at, stop_at;
-    uint32_t measure_refresh_ms;
     double segment_target, trim_start;
     uint8_t owned, auto_pending, operation, segment, stable, enable_wait;
     uint8_t triggered, touched, stop_mask, waiting_position;
@@ -55,9 +51,6 @@ MechanismRequestResult Mechanism_HomeAll(Mechanism *m, uint32_t now_ms);
 MechanismRequestResult Mechanism_MoveTo(Mechanism *m, MechanismAxis axis, float target, float speed, uint32_t now_ms);
 MechanismRequestResult Mechanism_MoveRelative(Mechanism *m, MechanismAxis axis, float delta, float speed, uint32_t now_ms);
 MechanismRequestResult Mechanism_StartAcceptance(Mechanism *m, uint32_t now_ms);
-/* Explicit bottom-to-top run; count feedback directly, independent of mm/rev.
- * Success is a measurement only, not a HOME reference or automatic calibration. */
-MechanismRequestResult Mechanism_MeasureLift(Mechanism *m, uint32_t now_ms);
 void Mechanism_Stop(Mechanism *m, uint32_t now_ms);
 void Mechanism_GetSnapshot(const Mechanism *m, MechanismSnapshot *out);
 int Mechanism_OwnsAxes(const Mechanism *m);

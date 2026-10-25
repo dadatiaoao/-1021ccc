@@ -183,23 +183,6 @@ int MotorBus_Submit(MotorBus *b, const MotorAction *a, uint32_t now)
     r.address = addr; r.code = a->command.code; r.mask = bit(addr); r.kind = CONTROL;
     return enqueue(b, r, now);
 }
-/* Renew a live acknowledged velocity lease without issuing another motion. */
-int MotorBus_RenewVelocity(MotorBus *b, uint8_t address, uint32_t request_id,
-                          uint32_t lease_ms, uint32_t now)
-{
-    MotorNode *n;
-    if (!address_ok(address) || lease_ms<100u || lease_ms>5000u) return 0;
-#if MOTOR_DRIVER_REQUIRE_MANUAL
-    if (!b->manual) return 0;
-#endif
-    n=&b->nodes[address-1u];
-    if (!n->motion || n->request_id!=request_id || n->data.command_code!=EMM_VELOCITY ||
-        (n->action!=MOTOR_ACCEPTED && n->action!=MOTOR_EXECUTING) ||
-        n->stop_unconfirmed || (b->stop_mask & bit(address)) ||
-        due(now,n->deadline_ms) || !healthy(b,bit(address),now,1u)) return 0;
-    n->deadline_ms=now+lease_ms;
-    return 1;
-}
 /*
  * 接收按前左、前右、后左、后右排列的四轮有符号 RPM，生成 0xAA 多机帧。
  * 保留最新待发速度向量，替换待发向量不会延长已运行向量的租约；不是底盘运动学解算。

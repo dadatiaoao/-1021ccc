@@ -49,9 +49,6 @@ $trialAppCommand=$fixedCommand.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TR
 $trialAppCommand=$trialAppCommand.Substring(0,$trialAppCommand.IndexOf(' && qr_fixed_tests.exe'))+' && qr_trial_tests.exe trial-boot && qr_trial_tests.exe render'
 & $env:ComSpec /d /s /c $trialAppCommand
 if ($LASTEXITCODE -ne 0) { throw 'Shipped trial application tests failed' }
-$homeAppCommand=$trialAppCommand.Replace('/DMECHANISM_TRIAL_RUN=1','/DMECHANISM_TRIAL_RUN=1 /DMECHANISM_LIFT_CALIBRATION_MODE=0').Replace('qr_trial_tests.exe','qr_home_tests.exe')
-& $env:ComSpec /d /s /c $homeAppCommand
-if ($LASTEXITCODE -ne 0) { throw 'Normal auto-home application tests failed' }
 & (Join-Path $PSScriptRoot "test_chassis.ps1")
 & (Join-Path $PSScriptRoot "test_mechanism.ps1")
 

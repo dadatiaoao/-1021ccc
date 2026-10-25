@@ -1,5 +1,6 @@
 /* Synthetic mechanics + real MotorBus/Emm framing and incremental replies.
-   None of these distances, signs or scales are vehicle calibration data. */
+   config() uses synthetic fixture values; trial_tests() reads the vehicle
+   profile from mechanism_config.h. Neither test establishes physical calibration. */
 #include "mechanism/mechanism.h"
 #include "mechanism/bsp_limit_gpio.h"
 #include "stm32f4xx_hal.h"
@@ -42,7 +43,6 @@ typedef struct {
     uint32_t now,tx_done; uint8_t busy,bytes[128],length,online;
     uint8_t flags[7],freeze_position,drop_stop,reject_enable,hold_stop,stuck;
     uint8_t raw_mode[2],switch_high[2],drop_move_ack;
-    uint8_t velocity[7];
     uint8_t delayed[8],delayed_length,delay_ack;
     uint32_t reply_due; int32_t bias_counts[7];
     double counts[7],target[7]; int32_t rpm[7];
@@ -83,11 +83,6 @@ static void reply(Sim *s)
         s->rpm[a]=((int32_t)b[3]<<8)|b[4]; if (b[2]) s->rpm[a]= -s->rpm[a];
         s->flags[a]&=0xFDu;
         if (s->drop_move_ack) return; /* physical command accepted, reply lost */
-    } else if (b[1]==EMM_VELOCITY) {
-        s->velocity[a]=1u; ++s->moves[a];
-        s->rpm[a]=((int32_t)b[3]<<8)|b[4]; if (b[2]) s->rpm[a]= -s->rpm[a];
-        s->flags[a]&=0xFDu;
-        if (s->drop_move_ack) return;
     } else if (b[1]==EMM_STOP) {
         if (s->hold_stop || s->drop_stop) { if (s->drop_stop) --s->drop_stop; return; }
         s->rpm[a]=0; s->flags[a]|=2u;
@@ -121,7 +116,7 @@ static void run(Sim *s, uint32_t duration)
     for (t=0u;t<duration;++t,++s->now) {
         for (a=0u;a<7u;++a) if (s->rpm[a] && !s->stuck) {
             double step=s->rpm[a]*65536.0/60000.0;
-            if (!s->velocity[a] && !s->hold_stop && fabs(s->target[a]-s->counts[a])<=fabs(step)) {
+            if (!s->hold_stop && fabs(s->target[a]-s->counts[a])<=fabs(step)) {
                 s->counts[a]=s->target[a]; s->rpm[a]=0; s->flags[a]|=2u;
             } else s->counts[a]+=step;
         }
@@ -145,7 +140,6 @@ static void init_at(Sim *s, uint32_t now)
     t.context=s; t.send=send_wire; t.busy=wire_busy;
     MotorBus_Init(&s->bus,t,now); Chassis_Init(&s->chassis,&s->bus,0,now);
     Mechanism_Init(&s->mech,&s->bus,&s->cfg,now);
-    s->mech.auto_pending=1u; /* Legacy HOME scenarios explicitly request auto HOME. */
     s->mech.chassis=&s->chassis; s->chassis.external_busy=&s->mech.owned;
 }
 static void init(Sim *s) { init_at(s,0u); }
@@ -302,18 +296,17 @@ static void fault_tests(void)
 static void trial_tests(void)
 {
     /* LIFT seek/backoff/seek/park; ARM initially pressed, then the same four.
-       Check transmitted RPM so conversion/caps cannot silently defeat 2x home. */
-    static const unsigned home_rpm[]={10u,4u,4u,4u,2u,4u,2u,2u,2u};
+       Check transmitted RPM so conversion/caps cannot silently defeat homing speeds. */
+    static const unsigned home_rpm[]={20u,8u,8u,8u,4u,8u,4u,4u,4u};
     Sim s; MechanismConfig c; unsigned a;
     Mechanism_DefaultConfig(&c);
     for (a=0u;a<3u;++a) CHECK(!Mechanism_ConfigIssues(&c,a));
-    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==2.0);
+    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==40.0);
     init(&s); s.cfg=c;
     s.counts[4]= -2.0*65536.0/c.axis[0].units_per_rev;
     s.counts[5]=0.3*65536.0/c.axis[1].units_per_rev;
     s.counts[6]=8.0*65536.0/c.axis[2].units_per_rev;
     Mechanism_Init(&s.mech,&s.bus,&c,s.now); s.mech.chassis=&s.chassis;
-    s.mech.auto_pending=1u;
     homed(&s);
     CHECK(s.order[0]==6u && s.order[4]==5u && !s.moves[6]);
     CHECK(s.order_count==sizeof(home_rpm)/sizeof(home_rpm[0]));
@@ -323,63 +316,10 @@ static void trial_tests(void)
     if (s.mech.data.reason) fprintf(stderr,"TRIAL: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
     CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.done && s.mech.data.stage==8u);
     CHECK(s.moves[6]==4u && s.flags[5]&1u);
-    puts("TRIAL CONFIG PASS: 2x homing RPM on wire, 120deg/2mm/3200 profile, power-on 6->5 home, session zero, all eight stages (synthetic mechanics only)");
-}
-static void measurement_fixture(Sim *s)
-{
-    init(s); s->mech.auto_pending=0u; s->online=0x20u;
-    s->counts[5]=3.0*65536.0; /* 30 synthetic mm, beyond the old short seek. */
-    /* Measurement must work without an established length or pulse conversion. */
-    s->mech.config.axis[1].units_per_rev=0.0; s->mech.config.axis[1].pulses_per_rev=0u;
-    run(s,3000u);
-    CHECK(!s->moves[5]);
-    CHECK(Mechanism_MeasureLift(&s->mech,s->now)==MECH_ACCEPTED);
-}
-static void measurement_tests(void)
-{
-    Sim s; uint32_t id; int64_t first;
-    measurement_fixture(&s); id=s.mech.data.request_id;
-    CHECK(Mechanism_MeasureLift(&s.mech,s.now)==MECH_BUSY && s.mech.data.request_id==id);
-    finish(&s,30000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_SUCCESS && !s.mech.owned);
-    first=s.mech.data.lift_measure_counts;
-    NEAR(first,3.0*65536.0,500.0);
-    CHECK(!s.moves[4] && !s.moves[6] && s.moves[5]==1u && !s.rpm[5]);
-    CHECK(s.mech.data.reference[1]==MECH_UNREFERENCED);
-    CHECK(!MotorBus_RenewVelocity(&s.bus,6u,s.mech.segment_request,3000u,s.now));
-    CHECK(Mechanism_MeasureLift(&s.mech,s.now)==MECH_NOT_READY); /* still at TOP */
-    CHECK(s.mech.data.lift_measure_result==MECH_SUCCESS && s.mech.data.lift_measure_counts==first);
-    s.counts[5]=3.0*65536.0; run(&s,2000u);
-    CHECK(Mechanism_MeasureLift(&s.mech,s.now)==MECH_ACCEPTED);
-    finish(&s,30000u); CHECK(s.mech.data.lift_measure_result==MECH_SUCCESS);
-    NEAR(s.mech.data.lift_measure_counts,first,500.0);
-
-    measurement_fixture(&s); run(&s,3000u);
-    CHECK(!MotorBus_RenewVelocity(&s.bus,6u,s.mech.segment_request+1u,3000u,s.now));
-    CHECK(!MotorBus_RenewVelocity(&s.bus,6u,s.mech.segment_request,3000u,s.bus.nodes[5].deadline_ms));
-    Mechanism_Stop(&s.mech,s.now); finish(&s,5000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_CANCELLED && !s.mech.owned && !s.rpm[5]);
-    run(&s,3000u); CHECK(s.moves[5]==1u);
-
-    measurement_fixture(&s); s.drop_stop=1u; finish(&s,30000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_SUCCESS && s.stops[5]>=2u);
-    measurement_fixture(&s); run(&s,3000u); s.raw_mode[1]=3u; finish(&s,5000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_FAILED && s.mech.data.reason==MECH_LIMIT_UNSTABLE);
-    measurement_fixture(&s); run(&s,3000u); s.freeze_position=6u; finish(&s,5000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_FAILED && !s.rpm[5]);
-    measurement_fixture(&s); s.raw_mode[1]=2u; finish(&s,130000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_FAILED && !s.rpm[5]);
-    CHECK(s.mech.data.reason==MECH_TIMEOUT || s.mech.data.reason==MECH_NOT_FOUND);
-    measurement_fixture(&s); s.drop_move_ack=1u; finish(&s,6000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_FAILED && !s.rpm[5]);
-    measurement_fixture(&s); run(&s,3000u); s.hold_stop=1u; s.raw_mode[1]=1u; run(&s,5000u);
-    CHECK(s.mech.data.lift_measure_result==MECH_FAILED && s.mech.owned);
-    s.hold_stop=0u; finish(&s,5000u); CHECK(!s.mech.owned && !s.rpm[5]);
-    puts("PASS: lift measurement raw counts, lease renewal, only axis 6, repeat, TOP gate, STOP, lost STOP/ACK, bounce, stale position, timeout and unconfirmed stop");
+    puts("TRIAL CONFIG PASS: ARM 8/4 and LIFT 20/8 homing RPM on wire, 120deg/40mm/3200 profile, power-on 6->5 home, session zero, all eight stages (synthetic mechanics only)");
 }
 int main(int argc, char **argv)
 {
-    if (argc>1 && !strcmp(argv[1],"measure")) { measurement_tests(); return 0; }
     if (argc>1 && !strcmp(argv[1],"trial")) { trial_tests(); return 0; }
     default_and_gpio(); home_and_acceptance(); conversion_and_gates(); fault_tests();
     printf("MECHANISM PASS (%u checks), sizeof(Mechanism)=%zu\n",checks,sizeof(Mechanism)); return 0;

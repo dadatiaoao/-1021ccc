@@ -8,14 +8,6 @@
 #ifndef MECHANISM_TRIAL_RUN
 #define MECHANISM_TRIAL_RUN 1
 #endif
-/* Temporary measurement firmware: wait for an explicit START at the bottom.
- * Set to 0 after measuring to restore the normal one-shot power-on HOME. */
-#ifndef MECHANISM_LIFT_CALIBRATION_MODE
-#define MECHANISM_LIFT_CALIBRATION_MODE MECHANISM_TRIAL_RUN
-#endif
-#define MECHANISM_LIFT_CAL_RPM 10u
-#define MECHANISM_LIFT_CAL_TIMEOUT_MS 120000u
-#define MECHANISM_LIFT_CAL_MAX_COUNTS (INT64_C(20)*65536)
 typedef struct {
     double units_per_rev; /* ARM degrees; LIFT/TRIM mm, per MOTOR revolution */
     uint32_t pulses_per_rev;
@@ -43,31 +35,34 @@ typedef struct {
 /* User confirmed 2026-10-25: ARM timing-pulley reduction is 1:3, hence
    120 deg/motor revolution; home is parallel to the chassis side, work is
    perpendicular (90 deg). ARM inward and LIFT upward homing directions work.
-   LIFT uses a timing belt with no reduction and 150 mm physical travel.
-   Its mm/motor revolution remains unknown: retain the 2 mm trial scale and
-   10 mm command cap until pulley pitch/teeth or measured travel/rev is known.
+   LIFT is a direct timing-belt drive: approximately 165 mm over an average
+   264855 feedback counts (six full-stroke runs), 65536 counts/motor rev.
+   User now assumes 20 teeth x 2 mm pitch = 40 mm/motor rev.
+   20-tooth MXL (2.032 mm pitch) could instead give 40.64 mm/rev.
+   The 160 mm command cap is unchanged; remaining physical travel is unverified.
+   LIFT max RPM 20.1 allows roundoff at 20 RPM; integer 21 RPM is still rejected.
    3200 command pulses/rev, TRIM scale and TRIM direction remain assumptions. */
-#define MECHANISM_LIFT_PREVIEW_MM_PER_REV 2.0
+#define MECHANISM_LIFT_MM_PER_REV 40.0
 #define MECHANISM_TRIAL_PULSES_PER_REV 3200u
 #define MECHANISM_TRIAL_ARM_SIGN 1
 #define MECHANISM_TRIAL_LIFT_SIGN 1
 #define MECHANISM_TRIAL_TRIM_SIGN 1
 #if MECHANISM_TRIAL_RUN
 /* Confirmation bits below permit ONLY the trial explicitly requested by the
-   user. They do not record measurements. Start close to the home switches:
-   search bounds are ARM 10 deg / LIFT 2 mm (in these assumed units).
+   user. They do not record measurements. Full-range search bounds are
+   ARM 100 deg / LIFT 170 mm; the raw switch requests an early STOP.
    Software ranges are trial command caps, not measured mechanical end stops. */
 #define MECHANISM_CALIBRATION { \
-    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,4.0f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
-     {MECHANISM_LIFT_PREVIEW_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,15.0f,0.5f,MECHANISM_TRIAL_LIFT_SIGN,1u,100u}, \
+    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,8.0f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
+     {MECHANISM_LIFT_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,20.1f,10.0f,MECHANISM_TRIAL_LIFT_SIGN,1u,100u}, \
      {2.0,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,15.0f,0.5f,MECHANISM_TRIAL_TRIM_SIGN,1u,100u}}, \
-    {{90.0f,3.0f,10.0f,2.0f,4.0f,2.0f,4.0f,2.0f,1u,1u}, \
-     {10.0f,0.5f,2.0f,0.2f,0.4f,0.2f,10.0f,4.0f,1u,1u}}, \
+    {{90.0f,6.0f,100.0f,4.0f,10.0f,4.0f,8.0f,4.0f,1u,1u}, \
+     {160.0f,8.0f,170.0f,4.0f,10.0f,4.0f,20.0f,8.0f,1u,1u}}, \
     90.0f,0.1f,2.0f,5.0f,5.0f,10000u,100u,500u }
 #else
 #define MECHANISM_CALIBRATION { \
     {{120.0,0u,1.0f,0.0f,0.0f,0,0u,100u}, \
-     {MECHANISM_LIFT_PREVIEW_MM_PER_REV,0u,0.5f,0.0f,0.0f,0,0u,100u}, \
+     {MECHANISM_LIFT_MM_PER_REV,0u,0.5f,0.0f,0.0f,0,0u,100u}, \
      {0.0,0u,0.5f,0.0f,0.0f,0,0u,100u}}, \
     {{0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,5.0f,2.0f,0u,0u}, \
      {0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,5.0f,2.0f,0u,0u}}, \

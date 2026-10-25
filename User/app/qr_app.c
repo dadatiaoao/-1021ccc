@@ -36,7 +36,6 @@ void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
     a->mechanism.chassis=&a->chassis;
     a->chassis.external_busy=&a->mechanism.owned;
     a->ui.mechanism=&a->mechanism;
-    if (MECHANISM_LIFT_CALIBRATION_MODE) a->ui.page=UI_LIFT_CAL;
 }
 /*
  * 给陀螺校准提供拒绝原因：活动、未知、未确认停止或无已知阻碍。
@@ -93,7 +92,6 @@ void QrApp_Process(QrApp *a, uint32_t now)
     else if (action==QR_UI_CHASSIS_START) (void)Chassis_StartAcceptance(&a->chassis,now);
     else if (action==QR_UI_MECH_HOME) (void)Mechanism_HomeAll(&a->mechanism,now);
     else if (action==QR_UI_MECH_TEST) (void)Mechanism_StartAcceptance(&a->mechanism,now);
-    else if (action==QR_UI_LIFT_MEASURE) (void)Mechanism_MeasureLift(&a->mechanism,now);
     else if ((action==QR_UI_GYRO_CAL || action==QR_UI_GYRO_ZERO) &&
         (Chassis_OwnsWheels(&a->chassis) || Mechanism_OwnsAxes(&a->mechanism))) {
         a->motor.message=Mechanism_OwnsAxes(&a->mechanism) ? "MECHANISM BUSY" : "CHASSIS BUSY";
