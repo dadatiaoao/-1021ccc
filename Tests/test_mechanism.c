@@ -297,11 +297,11 @@ static void trial_tests(void)
 {
     /* LIFT seek/backoff/seek/park; ARM initially pressed, then the same four.
        Check transmitted RPM so conversion/caps cannot silently defeat homing speeds. */
-    static const unsigned home_rpm[]={20u,8u,8u,8u,4u,8u,4u,4u,4u};
+    static const unsigned home_rpm[]={60u,12u,12u,12u,6u,24u,6u,6u,6u};
     Sim s; MechanismConfig c; unsigned a;
     Mechanism_DefaultConfig(&c);
     for (a=0u;a<3u;++a) CHECK(!Mechanism_ConfigIssues(&c,a));
-    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==40.0);
+    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==40.0 && c.axis[2].units_per_rev==1.0);
     init(&s); s.cfg=c;
     s.counts[4]= -2.0*65536.0/c.axis[0].units_per_rev;
     s.counts[5]=0.3*65536.0/c.axis[1].units_per_rev;
@@ -316,7 +316,7 @@ static void trial_tests(void)
     if (s.mech.data.reason) fprintf(stderr,"TRIAL: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
     CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.done && s.mech.data.stage==8u);
     CHECK(s.moves[6]==4u && s.flags[5]&1u);
-    puts("TRIAL CONFIG PASS: ARM 8/4 and LIFT 20/8 homing RPM on wire, 120deg/40mm/3200 profile, power-on 6->5 home, session zero, all eight stages (synthetic mechanics only)");
+    puts("TRIAL CONFIG PASS: ARM 24/6 and LIFT 60/12 homing RPM on wire, 120deg/40mm/1mm/3200 profile, power-on 6->5 home, session zero, all eight stages (synthetic mechanics only)");
 }
 int main(int argc, char **argv)
 {

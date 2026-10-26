@@ -40,9 +40,14 @@ typedef struct {
    User now assumes 20 teeth x 2 mm pitch = 40 mm/motor rev.
    20-tooth MXL (2.032 mm pitch) could instead give 40.64 mm/rev.
    The 160 mm command cap is unchanged; remaining physical travel is unverified.
-   LIFT max RPM 20.1 allows roundoff at 20 RPM; integer 21 RPM is still rejected.
-   3200 command pulses/rev, TRIM scale and TRIM direction remain assumptions. */
+   User confirmed 2026-10-26: TRIM screw diameter 6 mm, pitch 1 mm,
+   single-start screw and direct motor coupling, hence 1 mm/motor rev;
+   screw diameter does not enter the position conversion.
+   RPM caps include 0.1 RPM headroom for floating-point conversion roundoff;
+   the next integer RPM remains rejected.
+   3200 command pulses/rev and TRIM direction remain assumptions. */
 #define MECHANISM_LIFT_MM_PER_REV 40.0
+#define MECHANISM_TRIM_MM_PER_REV 1.0
 #define MECHANISM_TRIAL_PULSES_PER_REV 3200u
 #define MECHANISM_TRIAL_ARM_SIGN 1
 #define MECHANISM_TRIAL_LIFT_SIGN 1
@@ -50,20 +55,20 @@ typedef struct {
 #if MECHANISM_TRIAL_RUN
 /* Confirmation bits below permit ONLY the trial explicitly requested by the
    user. They do not record measurements. Full-range search bounds are
-   ARM 100 deg / LIFT 170 mm; the raw switch requests an early STOP.
+   ARM 360 deg / LIFT 170 mm; the raw switch requests an early STOP.
    Software ranges are trial command caps, not measured mechanical end stops. */
 #define MECHANISM_CALIBRATION { \
-    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,8.0f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
-     {MECHANISM_LIFT_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,20.1f,10.0f,MECHANISM_TRIAL_LIFT_SIGN,1u,100u}, \
-     {2.0,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,15.0f,0.5f,MECHANISM_TRIAL_TRIM_SIGN,1u,100u}}, \
-    {{90.0f,6.0f,100.0f,4.0f,10.0f,4.0f,8.0f,4.0f,1u,1u}, \
-     {160.0f,8.0f,170.0f,4.0f,10.0f,4.0f,20.0f,8.0f,1u,1u}}, \
+    {{120.0,MECHANISM_TRIAL_PULSES_PER_REV,1.0f,24.1f,6.0f,MECHANISM_TRIAL_ARM_SIGN,1u,100u}, \
+     {MECHANISM_LIFT_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,60.1f,10.0f,MECHANISM_TRIAL_LIFT_SIGN,1u,100u}, \
+     {MECHANISM_TRIM_MM_PER_REV,MECHANISM_TRIAL_PULSES_PER_REV,0.05f,30.1f,0.5f,MECHANISM_TRIAL_TRIM_SIGN,1u,100u}}, \
+    {{90.0f,6.0f,360.0f,4.0f,10.0f,4.0f,24.0f,6.0f,1u,1u}, \
+     {160.0f,8.0f,170.0f,4.0f,10.0f,4.0f,60.0f,12.0f,1u,1u}}, \
     90.0f,0.1f,2.0f,5.0f,5.0f,10000u,100u,500u }
 #else
 #define MECHANISM_CALIBRATION { \
     {{120.0,0u,1.0f,0.0f,0.0f,0,0u,100u}, \
      {MECHANISM_LIFT_MM_PER_REV,0u,0.5f,0.0f,0.0f,0,0u,100u}, \
-     {0.0,0u,0.5f,0.0f,0.0f,0,0u,100u}}, \
+     {MECHANISM_TRIM_MM_PER_REV,0u,0.5f,0.0f,0.0f,0,0u,100u}}, \
     {{0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,5.0f,2.0f,0u,0u}, \
      {0.0f,0.0f,0.0f,0.0f,0.0f,0.0f,5.0f,2.0f,0u,0u}}, \
     0.0f,0.0f,0.0f,5.0f,5.0f,10000u,100u,500u }

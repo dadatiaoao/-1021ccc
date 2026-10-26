@@ -256,7 +256,7 @@ UI 改版时的历史验证与 Keil 资源见[UI 改版说明](Doc/UI_REDESIGN_2
 - [主程序](User/main.c)、[应用编排](User/app/qr_app.c)、[界面](User/app/qr_ui.c)、[UI 改版与预览](Doc/UI_REDESIGN_2026-10-24.md)
 - [底盘 API](User/chassis/chassis.h)、[底盘配置](User/chassis/chassis_config.h)、[本分支说明与验收](Doc/CHASSIS_MOTOR_ODOMETRY_2026-10-24.md)、[历史交付](Doc/CHASSIS_IMPLEMENTATION_2026-10-23.md)
 - [电机配置](User/motor/motor_test_config.h)、[电机 API](User/motor/motor_bus.h)
-- [机构标定配置](User/mechanism/mechanism_config.h)、[机构 API](User/mechanism/mechanism.h)、[机构交付与验收](Doc/MECHANISM_IMPLEMENTATION_2026-10-24.md)
+- [机构标定配置](User/mechanism/mechanism_config.h)、[机构 API](User/mechanism/mechanism.h)、[机构交付与验收](Doc/MECHANISM_IMPLEMENTATION_2026-10-24.md)、[后续标定待办与记录](Doc/MECHANISM_CALIBRATION_TODO_2026-10-25.md)
 - [扫码配置](User/qr/qr_config.h)、[光流配置](User/flow/flow_config.h)、[陀螺配置](User/gyro/gyro_config.h)
 - [光流第三方许可](User/flow/THIRD_PARTY_NOTICES.md)、[陀螺来源与许可](User/gyro/UPSTREAM.md)：仍有效，不属于过时计划/交付文档。
 
