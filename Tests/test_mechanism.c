@@ -376,7 +376,7 @@ static void collision_tests(void)
         while (!s.homes && s.mech.data.result!=MECH_FAILED && s.now<40000u) run(&s,1u);
         if (i==2u) { s.drop_stop=1u; Mechanism_Stop(&s.mech,s.now); }
         if (i==3u) { s.stuck=1u; s.drop_home_status=1u; }
-        if (i==4u) { s.stuck=1u; } /* Fresh running state forever: local deadline. */
+        if (i==4u) { s.stuck=1u; } /* Contact inferred, then a persistent centering jam times out. */
         if (i==5u) {
             while (s.mech.data.state!=MECH_CENTERING && s.now<50000u) run(&s,1u);
             CHECK(s.mech.data.state==MECH_CENTERING); Mechanism_Stop(&s.mech,s.now);
@@ -395,13 +395,61 @@ static void collision_tests(void)
         CHECK(s.mech.data.result==(i==2u || i==5u || i==8u ? MECH_CANCELLED : MECH_FAILED));
         CHECK(s.mech.data.reference[2]==MECH_UNREFERENCED && !s.mech.auto_pending);
         if (i>=1u && i<=4u) CHECK(s.aborts>0u);
-        if (i!=5u) CHECK(!s.moves[6]); /* No center command after failed/aborted search. */
+        if (i!=5u && i!=4u) CHECK(!s.moves[6]); /* No center command after failed/aborted search. */
     }
     puts("PASS: native collision home + fixed backoff + midpoint; bounds, setup rejection, lost ACK/status, native failure/protection, timeout and verified STOP without reference");
+}
+static void trim_home_contact_tests(void)
+{
+    Sim s; uint32_t at; unsigned kind;
+    for (kind=0u;kind<4u;++kind) {
+        if (kind==1u) init_at(&s,UINT32_MAX-20000u); else init(&s);
+        while (!s.homes) run(&s,1u);
+        run(&s,10u);
+        s.counts[6]=50.0*65536.0/s.cfg.axis[2].units_per_rev*s.cfg.axis[2].positive_sign;
+        s.stuck=1u; s.rpm[6]=0; at=s.now;
+        while (s.mech.data.state!=MECH_CONTACT_STOP && s.now-at<3000u) {
+            s.bias_counts[6]=(s.now%2u) ? 10 : -10; run(&s,1u);
+        }
+        CHECK(s.mech.data.state==MECH_CONTACT_STOP && s.mech.data.result==MECH_RUNNING);
+        CHECK(!s.mech.data.reference[2] && !s.moves[6]);
+        s.bias_counts[6]=0;
+        if (kind==2u) {
+            s.hold_stop=1u; run(&s,4000u);
+            CHECK(s.mech.data.result==MECH_FAILED && !s.moves[6] && !s.mech.data.reference[2]);
+            CHECK(s.bus.nodes[6].stop_unconfirmed); continue;
+        }
+        if (kind==3u) {
+            Mechanism_Stop(&s.mech,s.now); run(&s,4000u);
+            CHECK(s.mech.data.result==MECH_CANCELLED && !s.moves[6] && !s.mech.data.reference[2]); continue;
+        }
+        s.stuck=0u; finish(&s,15000u);
+        CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.reference[2]==MECH_HOMED);
+        CHECK(s.aborts && s.homes==1u && s.moves[6]==1u);
+        NEAR(s.counts[6]*s.cfg.axis[2].positive_sign*s.cfg.axis[2].units_per_rev/65536.0,25.0,0.002);
+    }
+    /* No-progress during centering or an ordinary move must NEVER establish a zero. */
+    for (kind=0u;kind<2u;++kind) {
+        init(&s);
+        if (kind==0u) {
+            while (s.mech.data.state!=MECH_CENTERING || !s.bus.nodes[6].motion) run(&s,1u);
+        } else {
+            homed(&s);
+            CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,1.0f,s.now)==MECH_ACCEPTED);
+            while (!s.bus.nodes[6].motion) run(&s,1u);
+        }
+        run(&s,10u); s.stuck=1u; s.rpm[6]=0; at=s.now;
+        run(&s,2000u);
+        CHECK(s.mech.data.result==MECH_RUNNING && s.mech.data.state!=MECH_CONTACT_STOP);
+        finish(&s,30000u);
+        CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.reason==MECH_TIMEOUT);
+        CHECK(!s.mech.data.reference[2]);
+    }
+    puts("PASS: no-progress home contact -> verified STOP -> full 25mm centering; jitter/wraparound, unconfirmed STOP/cancel block centering, ordinary moves retain timeout");
 }
 int main(int argc, char **argv)
 {
     if (argc>1 && !strcmp(argv[1],"trial")) { trial_tests(); return 0; }
-    default_and_gpio(); home_and_acceptance(); conversion_and_gates(); fault_tests(); collision_tests();
+    default_and_gpio(); home_and_acceptance(); conversion_and_gates(); fault_tests(); collision_tests(); trim_home_contact_tests();
     printf("MECHANISM PASS (%u checks), sizeof(Mechanism)=%zu\n",checks,sizeof(Mechanism)); return 0;
 }

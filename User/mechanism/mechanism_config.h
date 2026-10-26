@@ -53,9 +53,10 @@ typedef struct {
    screw diameter does not enter the position conversion.
    RPM caps include 0.1 RPM headroom for floating-point conversion roundoff;
    the next integer RPM remains rejected.
-   TRIM TEST positive motion retracts (user observed); keep +1 = retract.
+   Corrected by user 2026-10-26: TRIM positive/home motion EXTENDS.
+   Keep the tested +1 protocol sign; negative motion retracts.
    TRIM has 50 mm total travel. Native collision home backs out 1 mm,
-   then moves outward another 24 mm to establish the midpoint as software zero.
+   then retracts another 24 mm to establish the midpoint as software zero.
    180 RPM and manufacturer collision defaults (300 RPM/800 mA/60 ms)
    are trial values, not measured contact-force or repeatability limits.
    User physically confirmed 2026-10-26: all motors (addresses 1-7)
@@ -63,6 +64,8 @@ typedef struct {
    the 65536 feedback counts per revolution. */
 #define MECHANISM_LIFT_MM_PER_REV 40.0
 #define MECHANISM_TRIM_MM_PER_REV 1.0
+#define MECHANISM_TRIM_NO_PROGRESS_MS 1500u
+#define MECHANISM_TRIM_PROGRESS_MM 0.02
 #define MECHANISM_TRIAL_PULSES_PER_REV 3200u
 #define MECHANISM_TRIAL_ARM_SIGN 1
 #define MECHANISM_TRIAL_LIFT_SIGN 1

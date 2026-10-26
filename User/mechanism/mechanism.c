@@ -97,6 +97,7 @@ static void begin(Mechanism *m, uint8_t op, uint32_t now)
     m->data.homing=(uint8_t)(op==OP_HOME);
     m->operation=op; m->owned=1u; m->touched=m->segment=m->stable=m->enable_wait=0u;
     m->triggered=m->waiting_position=0u; m->deadline=now+m->config.prepare_ms;
+    m->progress_request=0u;
 }
 static void fail(Mechanism *m, MechanismReason why, uint32_t now)
 {
@@ -349,13 +350,55 @@ static void prepare(Mechanism *m, uint32_t now)
         next_step(m,MECH_COLLISION_HOME,now);
     } else next_step(m,MECH_CHECK,now);
 }
-/* Native homing owns collision detection. No encoder-stillness heuristic. */
+/* User-validated endpoint detection, ONLY during TRIM homing search.
+   New position samples and a displacement deadband reject encoder jitter.
+   First abort native homing and verify STOP; then retreat 25 mm from contact. */
+static int trim_progress(Mechanism *m, const MotorNode *n, uint32_t now)
+{
+    double travel;
+    if (!n->motion) { m->progress_request=0u; return 1; }
+    if (m->progress_request!=n->request_id) {
+        m->progress_request=n->request_id; m->progress_ms=n->action_ms;
+        m->progress_counts=n->data.position_counts; m->progress_seq=n->data.position_seq;
+        m->progress_retreating=0u;
+    }
+    if (n->data.position_seq==m->progress_seq || !due(n->data.position_ms,n->action_ms+1u)) return 1;
+    m->progress_seq=n->data.position_seq;
+    travel=(double)(n->data.position_counts-m->progress_counts)*m->config.axis[MECH_TRIM].units_per_rev/65536.0;
+    /* Once native backoff has been observed, a later jam is not the search endpoint. */
+    if (travel*m->config.axis[MECH_TRIM].positive_sign<=-MECHANISM_TRIM_PROGRESS_MM) m->progress_retreating=1u;
+    if (m->progress_retreating) return 1;
+    if (fabs(travel)>=MECHANISM_TRIM_PROGRESS_MM) {
+        m->progress_counts=n->data.position_counts; m->progress_ms=now;
+    } else if (now-m->progress_ms>=MECHANISM_TRIM_NO_PROGRESS_MS) {
+        MotorBus_Stop(m->bus,axis_bit(MECH_TRIM),now);
+        m->data.state=MECH_CONTACT_STOP; m->data.stop_pending=1u;
+        m->data.stop_request_ms=now; m->stop_at=now;
+        m->deadline=now+3000u; m->waiting_position=m->stable=0u;
+        return 0;
+    }
+    return 1;
+}
+/* Native homing owns collision success detection. */
 static void trim_home_process(Mechanism *m, uint32_t now)
 {
     const MechanismTrimHomeConfig *h=&m->config.trim_home;
     const MechanismAxisConfig *c=&m->config.axis[MECH_TRIM];
     MotorNode *n=node(m,MECH_TRIM); EmmCommand command; MechanismReason why; uint8_t noop;
     double delta= -(h->travel_mm/2.0-h->backoff_tenths/3600.0*c->units_per_rev);
+    if (m->data.state==MECH_CONTACT_STOP) {
+        if (n->stop_sent) m->data.stop_submit_ms=n->stop_first_ms;
+        if (due(now,m->deadline)) { fail(m,MECH_STOP_UNCONFIRMED,now); return; }
+        if (n->stop_unconfirmed) return;
+        if (!healthy(n,now,1u)) { fail(m,motor_reason(n),now); return; }
+        if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
+        m->data.stop_confirm_ms=now; m->data.stop_pending=0u;
+        /* Native backoff was aborted: full half-travel, NOT the native 24 mm remainder. */
+        why=submit(m,MECH_TRIM,-h->travel_mm/2.0,h->rpm*c->units_per_rev/60.0,now,&noop);
+        if (why!=MECH_OK || noop) { fail(m,why!=MECH_OK ? why : MECH_RESOLUTION,now); return; }
+        m->data.target=0.0; m->data.state=MECH_CENTERING; m->waiting_position=0u;
+        return;
+    }
     if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
     if (m->segment) {
         if (n->request_id!=m->segment_request || n->stop_unconfirmed || n->action==MOTOR_CANCELLED) {
@@ -503,10 +546,15 @@ void Mechanism_Process(Mechanism *m, uint32_t now)
     }
     if (m->data.state==MECH_PREPARE) { prepare(m,now); return; }
     a=m->data.axis; n=node(m,a);
+    if (m->operation==OP_HOME && a==MECH_TRIM && m->data.state==MECH_CONTACT_STOP) {
+        trim_home_process(m,now); return;
+    }
     if (a==MECH_ARM && interlock(m,a,m->data.target,now)!=MECH_OK) { fail(m,MECH_INTERLOCK,now); return; }
     if (!healthy(n,now,1u) && !(m->operation==OP_HOME && m->segment==2u && n->stop_unconfirmed)) {
         fail(m,motor_reason(n),now); return;
     }
+    if (m->operation==OP_HOME && a==MECH_TRIM && m->data.state==MECH_COLLISION_HOME &&
+        m->segment==3u && !trim_progress(m,n,now)) return;
     if (m->operation==OP_HOME) {
         if (a==MECH_TRIM) trim_home_process(m,now); else home_process(m,now);
         return;
@@ -526,7 +574,7 @@ void Mechanism_GetSnapshot(const Mechanism *m, MechanismSnapshot *out) { if (out
 const char *Mechanism_StateName(MechanismState s)
 {
     static const char * const names[]={"IDLE","PREPARE","CHECK","INITIAL RELEASE","FAST SEEK","BACKOFF",
-        "SLOW SEEK","PARK RELEASE","MOVING","BETWEEN","STOPPING","FAULT","COLLISION HOME","CENTERING"};
+        "SLOW SEEK","PARK RELEASE","MOVING","BETWEEN","STOPPING","FAULT","COLLISION HOME","CENTERING","CONTACT STOP"};
     return (unsigned)s<sizeof(names)/sizeof(names[0]) ? names[s] : "?";
 }
 const char *Mechanism_ReasonName(MechanismReason r)

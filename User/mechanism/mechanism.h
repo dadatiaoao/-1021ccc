@@ -9,7 +9,8 @@ typedef enum { MECH_NONE, MECH_RUNNING, MECH_SUCCESS, MECH_FAILED, MECH_CANCELLE
 typedef enum { MECH_UNREFERENCED, MECH_HOMED } MechanismReference;
 typedef enum { MECH_IDLE, MECH_PREPARE, MECH_CHECK, MECH_INITIAL_RELEASE,
     MECH_FAST_SEEK, MECH_BACKOFF, MECH_SLOW_SEEK, MECH_PARK_RELEASE,
-    MECH_MOVING, MECH_BETWEEN, MECH_STOPPING, MECH_FAULT, MECH_COLLISION_HOME, MECH_CENTERING } MechanismState;
+    MECH_MOVING, MECH_BETWEEN, MECH_STOPPING, MECH_FAULT, MECH_COLLISION_HOME, MECH_CENTERING,
+    MECH_CONTACT_STOP } MechanismState;
 typedef enum { MECH_OK, MECH_CONFIG, MECH_FEEDBACK, MECH_AXIS_BUSY,
     MECH_INTERLOCK, MECH_ENABLE_FAILED, MECH_TIMEOUT, MECH_BUS_REJECTED,
     MECH_LIMIT, MECH_LIMIT_UNSTABLE, MECH_SAMPLE_GAP, MECH_NOT_FOUND,
@@ -39,9 +40,12 @@ typedef struct {
     MechanismSnapshot data;
     uint32_t last_sample_ms, deadline, stable_since, position_seq, wait_position_ms;
     uint32_t segment_request, trigger_at, stop_at;
+    uint32_t progress_request, progress_ms, progress_seq;
+    int64_t progress_counts;
     double segment_target, trim_start;
     uint8_t owned, auto_pending, operation, segment, stable, enable_wait;
     uint8_t triggered, touched, stop_mask, waiting_position;
+    uint8_t progress_retreating;
 } Mechanism;
 void Mechanism_Init(Mechanism *m, MotorBus *bus, const MechanismConfig *config, uint32_t now_ms);
 /* Call once per foreground loop BEFORE MotorBus_Process. No GPIO in service. */
