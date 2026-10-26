@@ -539,7 +539,7 @@ static void render_pages(void)
     a.chassis.odometry.valid=1; a.chassis.odometry.x=123.45; a.chassis.odometry.y=-67.89;
     a.chassis.odometry.angle=-12.34; a.chassis.odometry.sample_ms=tick;
     a.mechanism.data.reference[0]=a.mechanism.data.reference[1]=MECH_HOMED;
-    a.mechanism.data.reference[2]=MECH_SESSION_REFERENCE; a.mechanism.data.trim_ready=1u;
+    a.mechanism.data.reference[2]=MECH_HOMED; a.mechanism.data.trim_ready=1u;
     a.mechanism.data.position[0]=45.25; a.mechanism.data.position[1]=12.5; a.mechanism.data.position[2]=-1.25;
     a.mechanism.data.limit[0].valid=a.mechanism.data.limit[1].valid=1u;
     a.mechanism.data.limit[0].raw=a.mechanism.data.limit[0].stable=1u;

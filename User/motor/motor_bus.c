@@ -183,10 +183,31 @@ int MotorBus_Submit(MotorBus *b, const MotorAction *a, uint32_t now)
     r.address = addr; r.code = a->command.code; r.mask = bit(addr); r.kind = CONTROL;
     return enqueue(b, r, now);
 }
-/*
- * 接收按前左、前右、后左、后右排列的四轮有符号 RPM，生成 0xAA 多机帧。
- * 保留最新待发速度向量，替换待发向量不会延长已运行向量的租约；不是底盘运动学解算。
- */
+/* Native homing setup/start shares queue ownership, ACK and fault handling. */
+int MotorBus_HomeCommand(MotorBus *b, const EmmCommand *c, uint32_t timeout_ms, uint32_t now)
+{
+    MotorRequest r; uint8_t a;
+    if (!c || !address_ok(c->bytes[0]) || c->bytes[1]!=c->code) return 0;
+    a=c->bytes[0];
+    if (c->code==EMM_HOME_CONFIG) {
+        uint32_t tm=((uint32_t)c->bytes[8]<<24)|((uint32_t)c->bytes[9]<<16)|
+            ((uint32_t)c->bytes[10]<<8)|c->bytes[11];
+        unsigned rpm=((unsigned)c->bytes[6]<<8)|c->bytes[7];
+        if (c->length!=20u || c->bytes[2]!=0xAEu || c->bytes[3] || c->bytes[4]!=2u ||
+            c->bytes[5]>1u || !rpm || rpm>3000u || tm<100u || tm>60000u ||
+            c->bytes[18] || c->bytes[19]!=0x6Bu) return 0;
+    } else if (c->code==EMM_HOME_BACKOFF) {
+        if (c->length!=7u || c->bytes[2]!=0xACu || c->bytes[3] ||
+            !(c->bytes[4]|c->bytes[5]) || c->bytes[6]!=0x6Bu) return 0;
+    } else if (c->code==EMM_HOME) {
+        if (c->length!=5u || c->bytes[2]!=2u || c->bytes[3] || c->bytes[4]!=0x6Bu ||
+            timeout_ms<100u || timeout_ms>60000u) return 0;
+    } else return 0;
+    if (!healthy(b,bit(a),now,1u) || b->nodes[a-1u].motion || b->nodes[a-1u].homing) return 0;
+    memset(&r,0,sizeof(r)); r.action.command=*c; r.action.timeout_ms=timeout_ms;
+    r.address=a; r.code=c->code; r.mask=bit(a); r.kind=CONTROL;
+    return enqueue(b,r,now);
+}
 int MotorBus_Wheels(MotorBus *b, const int32_t rpm[4], uint8_t acc, uint32_t lease, uint32_t now)
 {
     MotorRequest r;
@@ -345,7 +366,7 @@ static void begin_motion(MotorBus *b, MotorNode *n, const MotorAction *a)
 {
     uint8_t was_moving = n->motion;
     n->motion = 1u; n->action = MOTOR_SENT; n->action_ms = b->now_ms;
-    n->deadline_ms = b->now_ms + (a->command.code == EMM_MOVE ? a->timeout_ms : a->lease_ms);
+    n->deadline_ms = b->now_ms + (a->command.code == EMM_MOVE || a->command.code == EMM_HOME ? a->timeout_ms : a->lease_ms);
     n->data.command_code = a->command.code;
     if (!was_moving) n->poll_due[0] = n->poll_due[1] = n->poll_due[2] = b->now_ms;
 }
@@ -375,7 +396,8 @@ static void received(void *context, const EmmFrame *f)
             index = 1u; d->position_counts = f->position; d->position_ms = b->now_ms;
             ++d->position_seq; d->valid |= MOTOR_VALID_POSITION;
         } else {
-            index = 2u; d->status_flags = f->flags; d->status_ms = b->now_ms;
+            index = 2u; if (f->code==EMM_HOME_STATUS) n->home_flags=f->home_flags;
+            d->status_flags = f->flags; d->status_ms = b->now_ms;
             ++d->status_seq; d->valid |= MOTOR_VALID_STATUS;
         }
         if (n->poll_samples[index] && b->now_ms - n->poll_last_ms[index] > n->max_poll_gap_ms[index])
@@ -404,7 +426,8 @@ static void received(void *context, const EmmFrame *f)
     } else if (r.kind == TRIGGER) {
         b->sync_state = MOTOR_SYNC_VERIFY; b->message = "SYNC TRIGGER ACK / VERIFY";
     } else {
-        n->action = MOTOR_ACCEPTED; b->message = "ACK ONLY / VERIFY FEEDBACK";
+        n->action = (r.code==EMM_HOME_CONFIG || r.code==EMM_HOME_BACKOFF) ? MOTOR_COMPLETE : MOTOR_ACCEPTED;
+        b->message = "ACK ONLY / VERIFY FEEDBACK";
         if (r.code == EMM_MOVE) { n->previous_target = n->target_counts; n->previous_known = n->target_known; }
     }
 }
@@ -456,8 +479,8 @@ static void monitor(MotorBus *b)
             due(n->data.speed_ms, n->stop_first_ms + 1u) && due(n->data.status_ms, n->stop_first_ms + 1u) &&
             MotorBus_Fresh(n, MOTOR_VALID_SPEED, b->now_ms) &&
             MotorBus_Fresh(n, MOTOR_VALID_STATUS, b->now_ms) && n->data.speed_rpm == 0 &&
-            !(n->data.status_flags & 0x0Cu)) {
-            n->stop_unconfirmed = 0u; b->stop_mask &= (uint8_t)~(1u << i);
+            !(n->data.status_flags & 0x0Cu) && (!n->homing || !(n->home_flags & 0x34u))) {
+            n->homing = 0u; n->stop_unconfirmed = 0u; b->stop_mask &= (uint8_t)~(1u << i);
             n->action = n->action == MOTOR_UNKNOWN && !(n->data.status_flags & 1u) ? MOTOR_IDLE : MOTOR_STOPPED;
         } else if (n->stop_unconfirmed && n->action != MOTOR_UNKNOWN && due(b->now_ms, n->deadline_ms)) {
             n->action = MOTOR_UNKNOWN; n->action_ms = b->now_ms;
@@ -496,12 +519,22 @@ static void monitor(MotorBus *b)
             (n->data.status_flags & 0x0Cu) || !(n->data.status_flags & 1u)) {
             fault_mask |= (uint8_t)(1u << i); continue;
         }
+        if (n->homing && (n->home_flags & 0x38u)) {
+            n->data.last_error=MOTOR_ERROR_STALL; fault_mask|=(uint8_t)(1u<<i); continue;
+        }
         if (due(b->now_ms, n->deadline_ms)) {
             n->data.last_error = MOTOR_ERROR_MOTION_TIMEOUT;
             fault_mask |= (uint8_t)(1u << i); continue;
         }
         if ((b->pending && b->active.id == n->request_id) ||
             b->sync_state == MOTOR_SYNC_PREPARE || b->sync_state == MOTOR_SYNC_TRIGGER) continue;
+        if (n->homing && n->action==MOTOR_ACCEPTED &&
+            MotorBus_Fresh(n,MOTOR_VALID_STATUS,b->now_ms) &&
+            MotorBus_Fresh(n,MOTOR_VALID_SPEED,b->now_ms) &&
+            due(n->data.status_ms,n->action_ms+1u) && due(n->data.speed_ms,n->action_ms+1u) &&
+            (n->home_flags & 0x3Fu)==3u && !n->data.speed_rpm) {
+            n->homing=n->motion=0u; n->action=MOTOR_COMPLETE;
+        }
         if (n->data.command_code == EMM_MOVE && n->target_known &&
             MotorBus_Fresh(n, MOTOR_VALID_POSITION, b->now_ms) &&
             MotorBus_Fresh(n, MOTOR_VALID_SPEED, b->now_ms) &&
@@ -544,7 +577,8 @@ static int choose(MotorBus *b)
             if (b->stop_mask & (1u << i)) break;
         }
         r.address = (uint8_t)(i + 1u); r.mask = bit(r.address); r.code = EMM_STOP; r.kind = STOP;
-        r.id = new_id(b); r.action.command = Emm_Stop(r.address); activate(b, r); return 1;
+        r.id = new_id(b); r.action.command = b->nodes[r.address-1u].homing ? Emm_HomeAbort(r.address) : Emm_Stop(r.address);
+        r.code=r.action.command.code; activate(b, r); return 1;
     }
     /* One retry at most before yielding a transaction slot to feedback/other
        polls. Rotate axes; never restart the stop's evidence baseline. */
@@ -554,7 +588,8 @@ static int choose(MotorBus *b)
         if (!n->stop_unconfirmed || !n->stop_sent || !due(b->now_ms, n->stop_retry_ms) ||
             !due(b->now_ms, n->quiet_until)) continue;
         r.address = n->data.address; r.mask = bit(r.address); r.code = EMM_STOP; r.kind = STOP;
-        r.id = new_id(b); r.action.command = Emm_Stop(r.address); b->retry_yield = 1u;
+        r.id = new_id(b); r.action.command = b->nodes[r.address-1u].homing ? Emm_HomeAbort(r.address) : Emm_Stop(r.address);
+        r.code=r.action.command.code; b->retry_yield = 1u;
         activate(b, r); return 1;
     }
     b->retry_yield = 0u;
@@ -599,6 +634,7 @@ static int choose(MotorBus *b)
         if (!n->stop_unconfirmed || !n->stop_sent || !due(b->now_ms, n->quiet_until)) continue;
         if (due(b->now_ms, n->poll_due[j])) {
             r.address = n->data.address; r.mask = bit(r.address); r.code = codes[j]; r.kind = QUERY;
+            if (r.code==EMM_STATUS && b->nodes[r.address-1u].homing) r.code=EMM_HOME_STATUS;
             r.action.command = Emm_Query(r.address, r.code); activate(b, r); return 1;
         }
     }
@@ -608,6 +644,7 @@ static int choose(MotorBus *b)
         b->poll_cursor = (uint8_t)((k + 1u) % 21u);
         if (!due(b->now_ms, n->poll_due[k % 3u]) || !due(b->now_ms, n->quiet_until)) continue;
         r.address = n->data.address; r.mask = bit(r.address); r.code = codes[k % 3u]; r.kind = QUERY;
+        if (r.code==EMM_STATUS && n->homing) r.code=EMM_HOME_STATUS;
         r.action.command = Emm_Query(r.address, r.code); activate(b, r); return 1;
     }
     if (b->diagnostic_mask) for (i = 0u; i < MOTOR_COUNT; ++i) if (b->diagnostic_mask & (1u << i)) {
@@ -654,7 +691,7 @@ void MotorBus_Process(MotorBus *b, uint32_t now)
     }
     if ((r->kind == CONTROL || r->kind == GROUP || r->kind == PREPARE || r->kind == TRIGGER) &&
         !healthy(b, r->mask, now, (uint8_t)(r->code != EMM_ENABLE))) { failed(b, 0xE2u); return; }
-    if ((r->kind == CONTROL && r->code != EMM_ENABLE) || r->kind == PREPARE) {
+    if ((r->kind == CONTROL && (r->code == EMM_MOVE || r->code == EMM_VELOCITY)) || r->kind == PREPARE) {
         if (!set_target(&b->nodes[r->address - 1u], &r->action, now)) { failed(b, 0xE2u); return; }
     }
     if (b->transport.send(b->transport.context, r->action.command.bytes, r->action.command.length)) {
@@ -691,7 +728,11 @@ void MotorBus_Process(MotorBus *b, uint32_t now)
                 begin_motion(b, n, &b->sync[i]);
                 if (n->target_known) { n->previous_target = n->target_counts; n->previous_known = 1u; }
             }
-        } else if (r->kind == CONTROL && r->code != EMM_ENABLE) {
+        } else if (r->kind == CONTROL && (r->code == EMM_MOVE || r->code == EMM_VELOCITY || r->code == EMM_HOME)) {
+            if (r->code==EMM_HOME) {
+                MotorNode *n=&b->nodes[r->address-1u];
+                n->homing=1u; n->home_flags=4u; n->target_known=n->previous_known=0u;
+            }
             begin_motion(b, &b->nodes[r->address - 1u], &r->action);
             if (r->code == EMM_VELOCITY) b->nodes[r->address - 1u].deadline_ms = r->expires_ms;
         } else if (r->kind != QUERY && r->kind != DIAGNOSTIC) {

@@ -213,7 +213,7 @@ static void mechanism(QrUi *u,uint32_t now)
 {
     const Mechanism *m=u->mechanism; const MechanismSnapshot *d;
     char t[UI_TEXT_BYTES],v[20]; unsigned i;
-    static const char * const refs[]={"NO ZERO","HOMED","SESSION ZERO"};
+    static const char * const refs[]={"NO ZERO","HOMED"};
     if (!m) { row(u,0u,"UNAVAILABLE"); return; } d=&m->data;
     if (!u->more) {
         snprintf(t,sizeof(t),"%s%s",Mechanism_StateName(d->state),MECHANISM_TRIAL_RUN ? " / TRIAL" : ""); row(u,0u,t);
@@ -224,7 +224,7 @@ static void mechanism(QrUi *u,uint32_t now)
             snprintf(t,sizeof(t),"%s: %s %s / %s",names[i],v,i ? "mm" : "deg",refs[d->reference[i]]); row(u,i+1u,t);
         }
         row(u,4u,Mechanism_ReasonName(d->reason!=MECH_OK ? d->reason : d->rejection));
-        row(u,5u,/* 5/6 机械零点； */ "5/6 \346\234\272\346\242\260\351\233\266\347\202\271\357\274\233" /* 7 上电会话零点 */ "7 \344\270\212\347\224\265\344\274\232\350\257\235\351\233\266\347\202\271");
+        row(u,5u,"5/6 HOME; 7 MIDPOINT");
         row(u,6u,MECHANISM_TRIAL_RUN ? /* TRIAL: 临时换算参数，尚未标定 */ "TRIAL: \344\270\264\346\227\266\346\215\242\347\256\227\345\217\202\346\225\260\357\274\214\345\260\232\346\234\252\346\240\207\345\256\232" : /* 换算参数需实物标定 */ "\346\215\242\347\256\227\345\217\202\346\225\260\351\234\200\345\256\236\347\211\251\346\240\207\345\256\232");
         row(u,7u,/* MORE 查看单轴与回零操作 */ "MORE \346\237\245\347\234\213\345\215\225\350\275\264\344\270\216\345\233\236\351\233\266\346\223\215\344\275\234"); return;
     }
