@@ -5,6 +5,7 @@
 #include "./fonts/ui_glyphs.h"
 #include "./flow/flow_ui.h"
 #include "./gyro/gyro_ui.h"
+#include "mission/mission_ui.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -12,7 +13,7 @@ enum { DRAW_IDLE, DRAW_CLEAR, DRAW_WIDGET, DRAW_FILL, DRAW_TEXT };
 static const uint16_t nav_x[5]={8u,104u,200u,296u,384u};
 static const uint16_t nav_w[5]={88u,88u,88u,80u,88u};
 static const char * const titles[]={/* 运行总览 */ "\350\277\220\350\241\214\346\200\273\350\247\210",/* 电机状态 */ "\347\224\265\346\234\272\347\212\266\346\200\201",/* 陀螺仪 */ "\351\231\200\350\236\272\344\273\252",/* 扫码任务 */ "\346\211\253\347\240\201\344\273\273\345\212\241",/* 光流诊断 */ "\345\205\211\346\265\201\350\257\212\346\226\255",
-    /* 视觉通信 */ "\350\247\206\350\247\211\351\200\232\344\277\241",/* 底盘位置解算 */ "\345\272\225\347\233\230\344\275\215\347\275\256\350\247\243\347\256\227",/* 机械臂三轴 */ "\346\234\272\346\242\260\350\207\202\344\270\211\350\275\264",/* 限位开关 */ "\351\231\220\344\275\215\345\274\200\345\205\263"};
+    /* 视觉通信 */ "\350\247\206\350\247\211\351\200\232\344\277\241",/* 底盘位置解算 */ "\345\272\225\347\233\230\344\275\215\347\275\256\350\247\243\347\256\227",/* 机械臂三轴 */ "\346\234\272\346\242\260\350\207\202\344\270\211\350\275\264",/* 限位开关 */ "\351\231\220\344\275\215\345\274\200\345\205\263","SERVO / PA6 + PC8","RACE / NOT CONNECTED"};
 
 static UiWidget *item(QrUi *u,unsigned x,unsigned y,unsigned w,unsigned h,
     unsigned button,const char *text)
@@ -45,6 +46,14 @@ QrUiAction QrUi_Touch(QrUi *u,int32_t x,int32_t y,uint8_t down)
         open_page(u,pages[i]); return QR_UI_NONE;
     }
     if (hit(x,y,400,4,72,32)) { u->more=(uint8_t)!u->more; u->redraw=1u; return QR_UI_NONE; }
+    if (u->page==UI_HOME && u->more && hit(x,y,8,196,216,30)) { open_page(u,UI_SERVO); return QR_UI_NONE; }
+    if (u->page==UI_HOME && u->more && hit(x,y,248,196,224,30)) { open_page(u,UI_RACE); return QR_UI_NONE; }
+    if (u->page==UI_RACE && hit(x,y,8,196,216,30)) return QR_UI_MISSION_START;
+    if (u->page==UI_SERVO) {
+        for (i=0u;i<8u;++i) if (hit(x,y,4+(int)(i%4u)*119,112+(int)(i/4u)*48,114,36))
+            return (QrUiAction)(QR_UI_SERVO_JAW_ON+i);
+        return QR_UI_NONE;
+    }
     if (u->page==UI_HOME && !u->more) {
         static const uint8_t pages[]={UI_MOTOR,UI_GYRO,UI_QR,UI_FLOW,UI_VISION,UI_MECHANISM};
         for (i=0u;i<6u;++i) if (hit(x,y,8+(int)(i%3u)*158,104+(int)(i/3u)*62,148,52)) {
@@ -123,8 +132,9 @@ static void home(QrUi *u,const QrService *q,const MotorBus *b,const FlowSnapshot
         row(u,1u,/* 比赛流程: 尚未接入 */ "\346\257\224\350\265\233\346\265\201\347\250\213: \345\260\232\346\234\252\346\216\245\345\205\245"); row(u,2u,"K230 READY / START: NOT IMPLEMENTED");
         snprintf(t,sizeof(t),"UART5 TX:%lu RX:%lu",(unsigned long)b->tx_frames,(unsigned long)b->rx_frames); row(u,3u,t);
         snprintf(t,sizeof(t),"STOP?:%u UI MAX:%lu ms",stops,(unsigned long)u->max_step_ms); row(u,4u,t);
-        row(u,5u,/* 位姿为估算值，回零参数仍需标定 */ "\344\275\215\345\247\277\344\270\272\344\274\260\347\256\227\345\200\274\357\274\214\345\233\236\351\233\266\345\217\202\346\225\260\344\273\215\351\234\200\346\240\207\345\256\232"); row(u,6u,/* 光流仅诊断，不参与底盘控制 */ "\345\205\211\346\265\201\344\273\205\350\257\212\346\226\255\357\274\214\344\270\215\345\217\202\344\270\216\345\272\225\347\233\230\346\216\247\345\210\266");
-        row(u,7u,/* 点击首页返回总览 */ "\347\202\271\345\207\273\351\246\226\351\241\265\350\277\224\345\233\236\346\200\273\350\247\210"); return;
+        row(u,5u,/* 位姿为估算值，回零参数仍需标定 */ "\344\275\215\345\247\277\344\270\272\344\274\260\347\256\227\345\200\274\357\274\214\345\233\236\351\233\266\345\217\202\346\225\260\344\273\215\351\234\200\346\240\207\345\256\232");
+        (void)item(u,8,196,216,30,1,"SERVOS");
+        (void)item(u,248,196,224,30,1,"RACE FRAMEWORK"); return;
     }
     snprintf(t,sizeof(t),/* 任务: %s */ "\344\273\273\345\212\241: %s",q->data.valid ? q->data.current.text : /* 等待扫码 */ "\347\255\211\345\276\205\346\211\253\347\240\201"); row(u,1u,t);
     snprintf(status[0],40,"%u/7 %s",online,stops ? "STOP?" : "ONLINE");
@@ -255,6 +265,28 @@ static void limits(QrUi *u,uint32_t now)
         snprintf(t,sizeof(t),"SAMPLE AGE:%lu ms",(unsigned long)(now-m->last_sample_ms)); row(u,7u,t);
     } else { row(u,5u,/* 高电平也可能表示接线断开 */ "\351\253\230\347\224\265\345\271\263\344\271\237\345\217\257\350\203\275\350\241\250\347\244\272\346\216\245\347\272\277\346\226\255\345\274\200"); row(u,6u,/* 原始电平与消抖结果分别显示 */ "\345\216\237\345\247\213\347\224\265\345\271\263\344\270\216\346\266\210\346\212\226\347\273\223\346\236\234\345\210\206\345\210\253\346\230\276\347\244\272"); }
 }
+static void servos(QrUi *u)
+{
+    static const char * const labels[]={"JAW ON","J 1700","J 2430","JAW OFF",
+                                        "TABLE ON","T PREV","T NEXT","TABLE OFF"};
+    unsigned i;
+    char t[UI_TEXT_BYTES];
+    if (u->servo_ready) {
+        for (i=0u;i<2u;++i) {
+            snprintf(t,sizeof(t),"%s:%s OUT:%u TGT:%ld us",i ? "TABLE" : "JAW",
+                Servo_IsEnabled((uint8_t)i) ? "ON" : "OFF",
+                Servo_IsEnabled((uint8_t)i) ? (unsigned)Servo_CurrentUs((uint8_t)i) : 0u,
+                (long)Servo_TargetUs((uint8_t)i));
+            row(u,i,t);
+        }
+    } else row(u,0u,"SERVO INIT FAILED / PWM OFF");
+    for (i=0u;i<8u;++i)
+        (void)item(u,4u+(i%4u)*119u,112u+(i/4u)*48u,114u,36u,1u,labels[i]);
+    (void)item(u,8u,196u,464u,24u,0u,u->servo && u->servo->boot_pending ? "WAIT: HOME AXES 6 / 5 / 7" : u->servo_blocked ? "ARM/CHASSIS BUSY" :
+        u->servo && u->servo->last_status==SERVO_REJECT_RANGE ? "LIMIT: TARGET UNCHANGED" :
+        u->servo && u->servo->last_status==SERVO_REJECT_STATE ? "TAP THAT SERVO ON FIRST" :
+        "TABLE: 1240 / 1900 / 2600 us");
+}
 static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,const FlowSnapshot *f,
     const GyroSnapshot *g,uint32_t now)
 {
@@ -267,6 +299,15 @@ static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,const FlowSnap
     case UI_CHASSIS: chassis(u,now); break;
     case UI_MECHANISM: mechanism(u,now); break;
     case UI_LIMITS: limits(u,now); break;
+    case UI_SERVO: servos(u); break;
+    case UI_RACE:
+        row(u,0u,"FRAMEWORK ONLY / NO EXECUTOR");
+        row(u,1u,"K230 READY / START NOT CONNECTED");
+        if (u->mission) {
+            MissionUi_Line(t,1u,u->mission,now); row(u,2u,t);
+            MissionUi_Line(t,6u,u->mission,now); row(u,3u,t);
+        }
+        (void)item(u,8,196,216,30,1,"START (NOT READY)"); break;
     case UI_VISION:
         row(u,0u,/* K230: 通信协议尚未实现 */ "K230: \351\200\232\344\277\241\345\215\217\350\256\256\345\260\232\346\234\252\345\256\236\347\216\260"); row(u,1u,"READY / START: NOT IMPLEMENTED");
         row(u,2u,/* 当前无任务阶段与视觉坐标回传 */ "\345\275\223\345\211\215\346\227\240\344\273\273\345\212\241\351\230\266\346\256\265\344\270\216\350\247\206\350\247\211\345\235\220\346\240\207\345\233\236\344\274\240");

@@ -1,4 +1,4 @@
-#include "app/qr_app.h"
+﻿#include "app/qr_app.h"
 #include "app/app_runtime.h"
 #include "usart/bsp_qr_uart.h"
 #include "usart/bsp_qr_trigger.h"
@@ -7,6 +7,7 @@
 #include "gyro/gyro_config.h"
 #include "lcd/bsp_lcd.h"
 #include "lcd/lcd_orientation.h"
+#include "servo/servo_pwm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -525,7 +526,7 @@ static void test_dashboard(void)
 static void render_pages(void)
 {
     QrApp a; FlowSnapshot f={0}; GyroSnapshot g={0}; unsigned page,more,i;
-    static const char * const names[]={"home","motor","gyro","qr","flow","vision","chassis","arm","limits"};
+    static const char * const names[]={"home","motor","gyro","qr","flow","vision","chassis","arm","limits","servo","race"};
     app_fixture(&a,200000u); receive(&a.qr,"156+123+516+231\r",tick);
     a.mechanism.auto_pending=0u;
     for(i=0u;i<7u;++i) {
@@ -543,7 +544,7 @@ static void render_pages(void)
     a.mechanism.data.position[0]=45.25; a.mechanism.data.position[1]=12.5; a.mechanism.data.position[2]=-1.25;
     a.mechanism.data.limit[0].valid=a.mechanism.data.limit[1].valid=1u;
     a.mechanism.data.limit[0].raw=a.mechanism.data.limit[0].stable=1u;
-    for(page=0u;page<=UI_LIMITS;++page) for(more=0u;more<2u;++more) {
+    for(page=0u;page<=UI_RACE;++page) for(more=0u;more<2u;++more) {
         char name[64]; a.ui.page=(uint8_t)page; a.ui.more=(uint8_t)more; a.ui.redraw=1;
         finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
         snprintf(name,sizeof(name),"ui_%s%s.pgm",names[page],more ? "_more" : ""); save_image(name);
@@ -567,7 +568,7 @@ static void render_pages(void)
     a.motor.nodes[0].data.position_counts=INT64_MIN;
     a.motor.nodes[0].data.rx_count=a.motor.nodes[0].data.timeouts=UINT32_MAX;
     finish_ui(&a.ui,&a.qr,&a.motor,&f,&g,tick); validate_widgets(&a.ui);
-    CHECK(!bad_layout); puts("PASS: rendered all 18 page variants, bounds, extreme counts, phase priority and invalid coordinates");
+    CHECK(!bad_layout); puts("PASS: rendered all 22 page variants, bounds, extreme counts, phase priority and invalid coordinates");
 }
 static void gyro_ready(QrApp *a)
 {
@@ -620,6 +621,32 @@ static void test_actions(void)
     CHECK(a.chassis.data.result==CHASSIS_CANCELLED && !a.motor.wheels_pending);
     for(i=0u;i<7u;++i) CHECK(!a.motor.nodes[i].stop_unconfirmed);
     CHECK(!bad_layout); puts("PASS: action edges, config gates, chassis START deduplication, gyro arbitration and seven-axis STOP");
+    press(&a,40,248); press(&a,420,18); press(&a,40,210);
+    CHECK(a.ui.page==UI_SERVO && a.ui.servo_ready);
+    press(&a,420,248); advance(&a,1800u);
+    CHECK(!a.servo.boot_pending && !Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
+    press(&a,40,248); press(&a,420,18); press(&a,280,210);
+    CHECK(a.ui.page==UI_RACE);
+    press(&a,40,210); CHECK(a.mission.state==MISSION_IDLE && a.mission.blocked);
+
+    /* Synthetic completed homing verifies the real app-to-servo startup gate. */
+    app_fixture(&a,350000u); app_motor.online=MOTOR_ALL;
+    for(i=0u;i<7u;++i) app_motor.flags[i]=3u;
+    advance(&a,2500u);
+    CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
+    a.mechanism.auto_pending=0u; a.mechanism.owned=0u;
+    a.mechanism.data.state=MECH_IDLE; a.mechanism.data.result=MECH_SUCCESS;
+    a.mechanism.data.homing=1u;
+    a.mechanism.data.reference[0]=a.mechanism.data.reference[1]=MECH_HOMED;
+    advance(&a,1u); CHECK(!Servo_IsEnabled(0u)); /* missing axis 7 */
+    a.mechanism.data.reference[2]=MECH_HOMED;
+    advance(&a,1u);
+    CHECK(Servo_IsEnabled(0u) && Servo_TargetUs(0u)==1700);
+    CHECK(Servo_IsEnabled(1u) && Servo_TargetUs(1u)==1240);
+    CHECK(!a.servo.boot_pending);
+    press(&a,420,248); advance(&a,100u);
+    CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
+
 }
 static void test_timing(void)
 {
@@ -654,16 +681,19 @@ static void test_trial_boot(void)
     QrApp a; uint32_t request,start;
     CHECK(BspQrUart_Init()); app_fixture(&a,500000u); app_motor.online=MOTOR_ALL;
     CHECK(a.ui.page==UI_HOME); start=tick;
+    CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
     /* Observe command start independently of the current length scale,
        search bound and RPM. Synthetic feedback is not physical calibration. */
     while (tick-start<4000u && !a.motor.nodes[5].motion) advance(&a,1u);
     CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_FAST_SEEK);
     CHECK(a.motor.nodes[5].motion && contains(&a.ui,"TRIAL") && contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
+    CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
     request=a.mechanism.data.request_id;
     press(&a,240,248); press(&a,420,18); press(&a,40,210);
     CHECK(a.mechanism.data.request_id==request && a.mechanism.data.rejection==MECH_AXIS_BUSY);
     press(&a,420,248); advance(&a,1500u);
     CHECK(a.mechanism.data.result==MECH_CANCELLED && !a.mechanism.auto_pending && !a.mechanism.owned);
+    CHECK(!a.servo.boot_pending && !Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
     CHECK(!bad_layout); puts("PASS: shipped TRIAL boots to dashboard, auto-homes lift, busy HOME rejected, STOP cancels");
 }
 #endif

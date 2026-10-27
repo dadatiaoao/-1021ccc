@@ -1,4 +1,4 @@
-#ifndef QR_UI_H
+﻿#ifndef QR_UI_H
 #define QR_UI_H
 #include "./qr/qr_service.h"
 #include "./motor/motor_bus.h"
@@ -6,12 +6,16 @@
 #include "./gyro/gyro_service.h"
 #include "./chassis/chassis.h"
 #include "./mechanism/mechanism.h"
+#include "servo/servo_control.h"
+#include "mission/mission.h"
 
 typedef enum { QR_UI_NONE, QR_UI_RESCAN, QR_UI_STOP_ALL, QR_UI_FLOW_CLEAR,
     QR_UI_GYRO_CAL, QR_UI_GYRO_ZERO, QR_UI_CHASSIS_START,
-    QR_UI_MECH_HOME, QR_UI_MECH_TEST } QrUiAction;
+    QR_UI_MECH_HOME, QR_UI_MECH_TEST, QR_UI_MISSION_START,
+    QR_UI_SERVO_JAW_ON, QR_UI_SERVO_JAW_LOW, QR_UI_SERVO_JAW_HIGH, QR_UI_SERVO_JAW_OFF,
+    QR_UI_SERVO_TABLE_ON, QR_UI_SERVO_TABLE_PREV, QR_UI_SERVO_TABLE_NEXT, QR_UI_SERVO_TABLE_OFF } QrUiAction;
 typedef enum { UI_HOME, UI_MOTOR, UI_GYRO, UI_QR, UI_FLOW, UI_VISION,
-    UI_CHASSIS, UI_MECHANISM, UI_LIMITS } QrUiPage;
+    UI_CHASSIS, UI_MECHANISM, UI_LIMITS, UI_SERVO, UI_RACE } QrUiPage;
 #define UI_WIDGETS 22u
 #define UI_TEXT_BYTES 96u
 typedef struct {
@@ -25,6 +29,9 @@ typedef struct {
     char previous[UI_WIDGETS][UI_TEXT_BYTES];
     const Chassis *chassis;
     const Mechanism *mechanism;
+    const ServoDualState *servo;
+    const Mission *mission;
+    uint8_t servo_ready, servo_blocked;
     uint32_t last_draw, max_step_ms;
     uint16_t clear_y, strip, text_x, text_y;
     uint8_t page, more, selected, axis, was_down, redraw;

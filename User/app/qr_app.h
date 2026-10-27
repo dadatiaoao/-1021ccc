@@ -5,12 +5,16 @@
  * Init 只在启动时执行，Process 从主循环反复调用；服务之间通过此编排层协作。
  */
 #include "qr_ui.h"
+#include "servo/servo_control.h"
+#include "mission/mission.h"
 #include "./motor/motor_bus.h"
 #include "./gyro/gyro_service.h"
 typedef struct {
     MotorBus motor; QrService qr; QrUi ui; FlowService flow; GyroService gyro;
     Chassis chassis;
     Mechanism mechanism;
+    ServoDualState servo;
+    Mission mission;
 } QrApp;
 void QrApp_Init(QrApp *app, MotorTransport motor, uint8_t qr_ready, uint32_t now_ms);
 void QrApp_Process(QrApp *app, uint32_t now_ms);

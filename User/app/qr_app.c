@@ -17,6 +17,9 @@
    Old raw motor/manual test menus have been removed. */
 static void stop_all(QrApp *a, uint32_t now)
 {
+    Mission_Stop(&a->mission,now);
+    ServoControl_CancelStartup(&a->servo);
+    if (a->ui.servo_ready) Servo_OffAll();
     Mechanism_Stop(&a->mechanism,now);
     Chassis_Stop(&a->chassis,now);
     MotorBus_Stop(&a->motor,MOTOR_ALL,now);
@@ -36,6 +39,11 @@ void QrApp_Init(QrApp *a, MotorTransport motor, uint8_t ready, uint32_t now)
     a->mechanism.chassis=&a->chassis;
     a->chassis.external_busy=&a->mechanism.owned;
     a->ui.mechanism=&a->mechanism;
+    a->ui.servo=&a->servo;
+    a->ui.servo_ready=(uint8_t)ServoControl_Init(&a->servo);
+    { MissionPort port={0}; Mission_Init(&a->mission,port); }
+    a->ui.mission=&a->mission;
+    Mission_Process(&a->mission,now);
 }
 /*
  * 给陀螺校准提供拒绝原因：活动、未知、未确认停止或无已知阻碍。
@@ -87,7 +95,19 @@ void QrApp_Process(QrApp *a, uint32_t now)
     AppTouch_Process(now); AppTouch_GetState(&x, &y, &down);
     now = AppClock_Now();
     action = QrUi_Touch(&a->ui, x, y, down);
-    if (action == QR_UI_RESCAN)
+    if (action==QR_UI_MISSION_START) (void)Mission_Start(&a->mission,now);
+    else if (action>=QR_UI_SERVO_JAW_ON && action<=QR_UI_SERVO_TABLE_OFF) {
+        ServoDualAction cmd=(ServoDualAction)(action-QR_UI_SERVO_JAW_ON+DUAL_JAW_ON);
+        uint8_t off=(uint8_t)(cmd==DUAL_JAW_OFF || cmd==DUAL_TABLE_OFF);
+        a->ui.servo_blocked=0u;
+        if (!a->ui.servo_ready) a->servo.last_status=SERVO_REJECT_STATE;
+        else if (!off && (a->servo.boot_pending || a->mechanism.auto_pending ||
+            Mechanism_OwnsAxes(&a->mechanism) || Chassis_OwnsWheels(&a->chassis) ||
+            a->motor.stop_mask || a->motor.queue_count || a->motor.manual || a->motor.wheels_pending))
+            a->ui.servo_blocked=1u;
+        else { if (off) ServoControl_CancelStartup(&a->servo); ServoControl_Command(&a->servo,cmd); }
+    }
+    else if (action == QR_UI_RESCAN)
         BspQrUart_BeginSession(&a->qr, now);
     else if (action==QR_UI_CHASSIS_START) (void)Chassis_StartAcceptance(&a->chassis,now);
     else if (action==QR_UI_MECH_HOME) (void)Mechanism_HomeAll(&a->mechanism,now);
@@ -108,6 +128,17 @@ void QrApp_Process(QrApp *a, uint32_t now)
     now = AppClock_Now(); /* Capture IRQs/touch I2C can advance SysTick during a step. */
     QrService_Process(&a->qr, now);
     Flow_Process(&a->flow, now);
+    if (a->ui.servo_ready) {
+        uint8_t homed=(uint8_t)(a->mechanism.data.homing && a->mechanism.data.result==MECH_SUCCESS &&
+            a->mechanism.data.reference[0]==MECH_HOMED && a->mechanism.data.reference[1]==MECH_HOMED &&
+            a->mechanism.data.reference[2]==MECH_HOMED);
+        uint8_t failed=(uint8_t)(a->mechanism.data.result==MECH_FAILED || a->mechanism.data.result==MECH_CANCELLED);
+        uint8_t busy=(uint8_t)(Mechanism_OwnsAxes(&a->mechanism) || Chassis_OwnsWheels(&a->chassis) ||
+            a->motor.stop_mask || a->motor.queue_count || a->motor.wheels_pending || a->motor.manual);
+        ServoControl_Startup(&a->servo,homed,busy,failed);
+        Servo_Process(now);
+    }
+    Mission_Process(&a->mission,now);
     now = AppClock_Now();
     Gyro_Process(&a->gyro, now, motor_active(a, now));
     now = AppClock_Now();

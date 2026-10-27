@@ -10,7 +10,7 @@ $sourceArgs = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $command = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /execution-charset:utf-8 /std:c11 /D_CRT_SECURE_NO_WARNINGS /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $sourceArgs + ' /Fe:motor_tests.exe && motor_tests.exe'
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'Motor host tests failed' }
-$qrSources = @('Tests\test_qr.c', 'Tests\flow_app_stub.c', 'Tests\gyro_app_stub.c', 'User\gyro\icm42688.c', 'User\gyro\gyro_service.c', 'User\gyro\gyro_ui.c', 'User\flow\pmw3901.c', 'User\flow\flow_service.c', 'User\flow\flow_ui.c', 'User\app\qr_ui.c', 'User\app\qr_app.c', 'User\app\app_runtime.c',
+$qrSources = @('Tests\test_qr.c', 'Tests\servo_app_stub.c', 'User\servo\servo_control.c', 'User\servo\servo_math.c', 'User\mission\mission.c', 'User\mission\mission_ui.c', 'Tests\flow_app_stub.c', 'Tests\gyro_app_stub.c', 'User\gyro\icm42688.c', 'User\gyro\gyro_service.c', 'User\gyro\gyro_ui.c', 'User\flow\pmw3901.c', 'User\flow\flow_service.c', 'User\flow\flow_ui.c', 'User\app\qr_ui.c', 'User\app\qr_app.c', 'User\app\app_runtime.c',
     'User\usart\bsp_qr_uart.c', 'User\usart\bsp_qr_trigger.c', 'User\usart\bsp_uart_callbacks.c',
     'User\motor\emm_protocol.c', 'User\motor\motor_service.c', 'User\motor\motor_bus.c',
     'User\fonts\font16.c', 'User\fonts\font24.c') | ForEach-Object { Join-Path $projectRoot $_ }
@@ -55,3 +55,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Shipped trial application tests failed' }
 & (Join-Path $PSScriptRoot "test_flow.ps1")
 
 & (Join-Path $PSScriptRoot "test_gyro.ps1")
+
+& (Join-Path $PSScriptRoot "test_servo.ps1")
+& (Join-Path $PSScriptRoot "test_mission.ps1")

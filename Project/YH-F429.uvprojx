@@ -945,6 +945,17 @@
             </File>
           </Files>
         </Group>
+        <Group>
+          <GroupName>SERVO_MISSION</GroupName>
+          <Files>
+            <File><FileName>servo_pwm.c</FileName><FileType>1</FileType><FilePath>..\User\servo\servo_pwm.c</FilePath></File>
+            <File><FileName>servo_math.c</FileName><FileType>1</FileType><FilePath>..\User\servo\servo_math.c</FilePath></File>
+            <File><FileName>servo_control.c</FileName><FileType>1</FileType><FilePath>..\User\servo\servo_control.c</FilePath></File>
+            <File><FileName>mission.c</FileName><FileType>1</FileType><FilePath>..\User\mission\mission.c</FilePath></File>
+            <File><FileName>mission_config.c</FileName><FileType>1</FileType><FilePath>..\User\mission\mission_config.c</FilePath></File>
+            <File><FileName>mission_ui.c</FileName><FileType>1</FileType><FilePath>..\User\mission\mission_ui.c</FilePath></File>
+          </Files>
+        </Group>
       </Groups>
     </Target>
   </Targets>

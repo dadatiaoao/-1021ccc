@@ -1,4 +1,4 @@
-#include "mechanism.h"
+﻿#include "mechanism.h"
 #include "./motor/motor_test_config.h"
 #include <math.h>
 #include <float.h>
@@ -69,10 +69,10 @@ uint32_t Mechanism_ConfigIssues(const MechanismConfig *c, unsigned a)
     if (a==2u) {
         const MechanismTrimHomeConfig *h=&c->trim_home;
         double backoff=h->backoff_tenths/3600.0*p->units_per_rev;
-        if (!positive(c->test_trim_mm) || c->test_trim_mm>h->travel_mm/2.0f) r|=MECH_CFG_MOTION;
+        if (!positive(c->test_trim_mm) || c->test_trim_mm>(double)h->travel_mm/2.0f) r|=MECH_CFG_MOTION;
         if (!positive(h->travel_mm) || !h->rpm || h->rpm>p->max_rpm ||
             !h->stall_rpm || !h->stall_ma || !h->stall_ms || !h->backoff_tenths ||
-            backoff>=h->travel_mm/2.0 || h->timeout_ms<100u || h->timeout_ms>60000u)
+            backoff>=(double)h->travel_mm/2.0 || h->timeout_ms<100u || h->timeout_ms>60000u)
             r|=MECH_CFG_HOME;
     }
     return r;
@@ -199,7 +199,7 @@ static MechanismReason submit(Mechanism *m, unsigned a, double delta, double spe
 }
 static int target_in_range(const Mechanism *m, unsigned a, double target)
 {
-    return a==MECH_TRIM ? fabs(target)<=m->config.trim_home.travel_mm/2.0 :
+    return a==MECH_TRIM ? fabs(target)<=(double)m->config.trim_home.travel_mm/2.0 :
         target>=0.0 && target<=m->config.home[a].max_position;
 }
 static MechanismRequestResult ready(Mechanism *m, unsigned a, uint32_t now)
@@ -385,7 +385,7 @@ static void trim_home_process(Mechanism *m, uint32_t now)
     const MechanismTrimHomeConfig *h=&m->config.trim_home;
     const MechanismAxisConfig *c=&m->config.axis[MECH_TRIM];
     MotorNode *n=node(m,MECH_TRIM); EmmCommand command; MechanismReason why; uint8_t noop;
-    double delta= -(h->travel_mm/2.0-h->backoff_tenths/3600.0*c->units_per_rev);
+    double delta= -((double)h->travel_mm/2.0-h->backoff_tenths/3600.0*c->units_per_rev);
     if (m->data.state==MECH_CONTACT_STOP) {
         if (n->stop_sent) m->data.stop_submit_ms=n->stop_first_ms;
         if (due(now,m->deadline)) { fail(m,MECH_STOP_UNCONFIRMED,now); return; }
@@ -394,7 +394,7 @@ static void trim_home_process(Mechanism *m, uint32_t now)
         if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
         m->data.stop_confirm_ms=now; m->data.stop_pending=0u;
         /* Native backoff was aborted: full half-travel, NOT the native 24 mm remainder. */
-        why=submit(m,MECH_TRIM,-h->travel_mm/2.0,h->rpm*c->units_per_rev/60.0,now,&noop);
+        why=submit(m,MECH_TRIM,-(double)h->travel_mm/2.0,h->rpm*c->units_per_rev/60.0,now,&noop);
         if (why!=MECH_OK || noop) { fail(m,why!=MECH_OK ? why : MECH_RESOLUTION,now); return; }
         m->data.target=0.0; m->data.state=MECH_CENTERING; m->waiting_position=0u;
         return;
