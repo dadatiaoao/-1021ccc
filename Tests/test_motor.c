@@ -6,7 +6,6 @@
 #include "motor/motor_demo_config.h"
 
 static unsigned checks;
-int TestMotorUi(void);
 #define CHECK(x) do { ++checks; if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); return 0; } } while (0)
 typedef struct {
     unsigned sends;
@@ -294,7 +293,7 @@ static int test_demo(void)
 
 int main(void)
 {
-    if (!test_protocol() || !test_service() || !test_demo() || !TestMotorUi()) return 1;
+    if (!test_protocol() || !test_service() || !test_demo()) return 1;
     printf("PASS: %u checks (protocol + service + automatic demo)\n", checks);
     return 0;
 }

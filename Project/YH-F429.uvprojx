@@ -10,8 +10,6 @@
       <TargetName>LCD</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
-      <pCCUsed>5060960::V5.06 update 7 (build 960)::.\ARMCC</pCCUsed>
-      <uAC6>0</uAC6>
       <TargetOption>
         <TargetCommonOption>
           <Device>STM32F429IGTx</Device>
@@ -86,8 +84,6 @@
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
-            <nStopA1X>0</nStopA1X>
-            <nStopA2X>0</nStopA2X>
           </AfterMake>
           <SelectedForBatchBuild>0</SelectedForBatchBuild>
           <SVCSIdString></SVCSIdString>
@@ -126,6 +122,47 @@
             <HexOffset>0</HexOffset>
             <Oh166RecLen>16</Oh166RecLen>
           </OPTHX>
+          <Simulator>
+            <UseSimulator>0</UseSimulator>
+            <LoadApplicationAtStartup>1</LoadApplicationAtStartup>
+            <RunToMain>1</RunToMain>
+            <RestoreBreakpoints>1</RestoreBreakpoints>
+            <RestoreWatchpoints>1</RestoreWatchpoints>
+            <RestoreMemoryDisplay>1</RestoreMemoryDisplay>
+            <RestoreFunctions>1</RestoreFunctions>
+            <RestoreToolbox>1</RestoreToolbox>
+            <LimitSpeedToRealTime>0</LimitSpeedToRealTime>
+            <RestoreSysVw>1</RestoreSysVw>
+          </Simulator>
+          <Target>
+            <UseTarget>1</UseTarget>
+            <LoadApplicationAtStartup>1</LoadApplicationAtStartup>
+            <RunToMain>1</RunToMain>
+            <RestoreBreakpoints>1</RestoreBreakpoints>
+            <RestoreWatchpoints>1</RestoreWatchpoints>
+            <RestoreMemoryDisplay>1</RestoreMemoryDisplay>
+            <RestoreFunctions>0</RestoreFunctions>
+            <RestoreToolbox>1</RestoreToolbox>
+            <RestoreTracepoints>1</RestoreTracepoints>
+            <RestoreSysVw>1</RestoreSysVw>
+          </Target>
+          <RunDebugAfterBuild>0</RunDebugAfterBuild>
+          <TargetSelection>2</TargetSelection>
+          <SimDlls>
+            <CpuDll></CpuDll>
+            <CpuDllArguments></CpuDllArguments>
+            <PeripheralDll></PeripheralDll>
+            <PeripheralDllArguments></PeripheralDllArguments>
+            <InitializationFile></InitializationFile>
+          </SimDlls>
+          <TargetDlls>
+            <CpuDll></CpuDll>
+            <CpuDllArguments></CpuDllArguments>
+            <PeripheralDll></PeripheralDll>
+            <PeripheralDllArguments></PeripheralDllArguments>
+            <InitializationFile></InitializationFile>
+            <Driver>BIN\CMSIS_AGDI.dll</Driver>
+          </TargetDlls>
         </DebugOption>
         <Utilities>
           <Flash1>
@@ -184,15 +221,12 @@
             <hadXRAM>0</hadXRAM>
             <uocXRam>0</uocXRam>
             <RvdsVP>2</RvdsVP>
-            <RvdsMve>0</RvdsMve>
-            <RvdsCdeCp>0</RvdsCdeCp>
             <hadIRAM2>1</hadIRAM2>
             <hadIROM2>0</hadIROM2>
             <StupSel>8</StupSel>
             <useUlib>1</useUlib>
             <EndSel>0</EndSel>
             <uLtcg>0</uLtcg>
-            <nSecure>0</nSecure>
             <RoSelD>3</RoSelD>
             <RwSelD>4</RwSelD>
             <CodeSel>0</CodeSel>
@@ -326,18 +360,10 @@
             <uThumb>0</uThumb>
             <uSurpInc>0</uSurpInc>
             <uC99>1</uC99>
-            <uGnu>0</uGnu>
             <useXO>0</useXO>
-            <v6Lang>1</v6Lang>
-            <v6LangP>1</v6LangP>
-            <vShortEn>1</vShortEn>
-            <vShortWch>1</vShortWch>
-            <v6Lto>0</v6Lto>
-            <v6WtE>0</v6WtE>
-            <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F429xx,USE_STM32F429I_DISCO</Define>
+              <Define>USE_HAL_DRIVER,STM32F429xx,USE_STM32F429I_DISCO,SERVO_DUAL_RUNTIME=1</Define>
               <Undefine></Undefine>
               <IncludePath>..\Libraries\CMSIS\Include;..\Libraries\CMSIS\Device\ST\STM32F4xx\Include;..\Libraries\STM32F4xx_HAL_Driver\Inc;..\User;..\User\led;..\User\sdram;..\User\usart;..\User\lcd;..\User\flash;..\User\touch</IncludePath>
             </VariousControls>
@@ -352,7 +378,6 @@
             <NoWarn>0</NoWarn>
             <uSurpInc>0</uSurpInc>
             <useXO>0</useXO>
-            <ClangAsOpt>4</ClangAsOpt>
             <VariousControls>
               <MiscControls></MiscControls>
               <Define></Define>
@@ -380,31 +405,6 @@
         </TargetArmAds>
       </TargetOption>
       <Groups>
-        <Group>
-          <GroupName>FLOW</GroupName>
-          <Files>
-            <File>
-              <FileName>bsp_flow_spi.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\flow\bsp_flow_spi.c</FilePath>
-            </File>
-            <File>
-              <FileName>pmw3901.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\flow\pmw3901.c</FilePath>
-            </File>
-            <File>
-              <FileName>flow_service.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\flow\flow_service.c</FilePath>
-            </File>
-            <File>
-              <FileName>flow_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\flow\flow_ui.c</FilePath>
-            </File>
-          </Files>
-        </Group>
         <Group>
           <GroupName>STARTUP</GroupName>
           <Files>
@@ -819,11 +819,6 @@
               <FilePath>..\User\app\app_runtime.c</FilePath>
             </File>
             <File>
-              <FileName>motor_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\User\app\motor_ui.c</FilePath>
-            </File>
-            <File>
               <FileName>emm_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\User\motor\emm_protocol.c</FilePath>
@@ -889,9 +884,14 @@
               <FilePath>..\User\chassis\chassis.c</FilePath>
             </File>
             <File>
-              <FileName>chassis_ui.c</FileName>
+              <FileName>mechanism.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\User\chassis\chassis_ui.c</FilePath>
+              <FilePath>..\User\mechanism\mechanism.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_limit_gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\mechanism\bsp_limit_gpio.c</FilePath>
             </File>
             <File>
               <FileName>bsp_qr_uart.c</FileName>
@@ -945,24 +945,83 @@
             </File>
           </Files>
         </Group>
+        <Group>
+          <GroupName>VISION</GroupName>
+          <Files>
+            <File>
+              <FileName>vision_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\vision\vision_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>vision_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\vision\vision_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>vision_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\vision\vision_ui.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_vision_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\usart\bsp_vision_uart.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>MISSION</GroupName>
+          <Files>
+            <File>
+              <FileName>mission.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\mission\mission.c</FilePath>
+            </File>
+            <File>
+              <FileName>mission_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\mission\mission_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>mission_runtime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\mission\mission_runtime.c</FilePath>
+            </File>
+            <File>
+              <FileName>mission_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\mission\mission_ui.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>SERVO</GroupName>
+          <Files>
+            <File>
+              <FileName>servo_math.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\servo\servo_math.c</FilePath>
+            </File>
+            <File>
+              <FileName>servo_pwm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\servo\servo_pwm.c</FilePath>
+            </File>
+            <File>
+              <FileName>servo_bench.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\servo\servo_bench.c</FilePath>
+            </File>
+            <File>
+              <FileName>servo_dual_bench.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\servo\servo_dual_bench.c</FilePath>
+            </File>
+          </Files>
+        </Group>
       </Groups>
     </Target>
   </Targets>
-
-  <RTE>
-    <apis/>
-    <components/>
-    <files/>
-  </RTE>
-
-  <LayerInfo>
-    <Layers>
-      <Layer>
-        <LayName>&lt;Project Info&gt;</LayName>
-        <LayTarg>0</LayTarg>
-        <LayPrjMark>1</LayPrjMark>
-      </Layer>
-    </Layers>
-  </LayerInfo>
 
 </Project>

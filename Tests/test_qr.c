@@ -6,6 +6,8 @@
 #include "motor/motor_test_config.h"
 #include "gyro/gyro_config.h"
 #include "lcd/bsp_lcd.h"
+#include "lcd/lcd_orientation.h"
+#include "servo/servo_pwm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -120,6 +122,10 @@ static void test_stream_sessions(void)
 USART_TypeDef fake_usart1, fake_usart3, fake_uart5;
 DMA_Stream_TypeDef fake_stream1;
 GPIO_TypeDef fake_gpiob;
+GPIO_TypeDef fake_gpiog;
+static uint8_t limit_levels[2];
+uint32_t HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)
+{ CHECK(port==GPIOG && (pin==GPIO_PIN_2 || pin==GPIO_PIN_3)); return limit_levels[pin==GPIO_PIN_2 ? 0u : 1u]; }
 static UART_HandleTypeDef *uart;
 static uint8_t *dma_memory;
 static uint16_t dma_size;
@@ -154,6 +160,9 @@ HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *d) { d->State=HAL_DMA_STATE_R
 HAL_StatusTypeDef HAL_DMA_DeInit(DMA_HandleTypeDef *d) { d->State=HAL_DMA_STATE_READY; return HAL_OK; }
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *g)
 {
+    if (port==GPIOG) {
+        CHECK(g->Pin==(GPIO_PIN_2|GPIO_PIN_3) && g->Mode==GPIO_MODE_INPUT && g->Pull==GPIO_PULLUP); return;
+    }
     if (g->Pin == (GPIO_PIN_10 | GPIO_PIN_11)) {
         CHECK(port==GPIOB && g->Mode==GPIO_MODE_AF_PP && g->Alternate==GPIO_AF7_USART3);
         ++gpio_checked;
@@ -216,35 +225,35 @@ static uint8_t pixels[272][480];
 static sFONT *font;
 static uint32_t foreground, background;
 static unsigned draws, clears, bad_layout;
-static char lines[9][64];
 /* Same monotonic clock as HAL/gyro. Costs are injected, never board timings. */
 static unsigned lcd_timed, lcd_overrun, lcd_max_step;
 static uint32_t lcd_clear_ms=12u, lcd_fill_ms=1u, lcd_text_ms=1u, lcd_setup_ms;
-static const unsigned ys[9]={8,32,60,92,114,136,158,180,202};
 void LCD_SetFont(sFONT *f) { if(lcd_timed) tick+=lcd_setup_ms; font=f; }
 void LCD_SetBackColor(uint32_t c) { if(lcd_timed) tick+=lcd_setup_ms; background=c; }
 void LCD_SetTextColor(uint32_t c) { if(lcd_timed) tick+=lcd_setup_ms; foreground=c; }
-void LCD_Clear(uint32_t c) { if(lcd_timed) tick+=lcd_clear_ms; ++clears; memset(pixels,c?255:0,sizeof(pixels)); memset(lines,0,sizeof(lines)); }
+void LCD_Clear(uint32_t c) { if(lcd_timed) tick+=lcd_clear_ms; ++clears; memset(pixels,c?255:0,sizeof(pixels)); }
 void LCD_FillRect(uint16_t x,uint16_t y,uint16_t w,uint16_t h)
 {
     unsigned i,j;
     if(lcd_timed) tick+=lcd_overrun ? 12u : (lcd_fill_ms+((unsigned)w*h)/2000u);
     if((unsigned)x+w>480u || (unsigned)y+h>272u) { ++bad_layout; return; }
-    if(x==8u) for(i=0;i<9u;++i) if(y==ys[i]) lines[i][0]='\0';
+    if (!Lcd_OrientRect(&x,&y,&w,&h,480,272)) return;
     for(i=y;i<(unsigned)y+h;++i) for(j=x;j<(unsigned)x+w;++j) pixels[i][j]=foreground?255u:0u;
+}
+void LCD_DrawPixel(uint16_t x,uint16_t y,uint32_t color)
+{
+    uint16_t w=1u,h=1u;
+    if (x>=480u || y>=272u) { ++bad_layout; return; }
+    if (Lcd_OrientRect(&x,&y,&w,&h,480,272)) pixels[y][x]=color ? 255u : 0u;
 }
 void LCD_DisplayStringAt(uint16_t x,uint16_t y,uint8_t *text,unsigned mode)
 {
-    unsigned row,i,j,k,byte_width,offset;
+    unsigned i,j,k,byte_width,offset;
     uint32_t bits;
     (void)mode; ++draws;
     if(lcd_timed) tick+=lcd_text_ms+(unsigned)strlen((char *)text)/2u;
     if(!font || (unsigned)x+strlen((char *)text)*font->Width>480u || (unsigned)y+font->Height>272u) {
         ++bad_layout; return;
-    }
-    for(row=0;row<9u;++row) if(y==ys[row] && x>=8u) {
-        unsigned col=(x-8u)/font->Width;
-        if(col+strlen((char *)text)<sizeof(lines[row])) strcpy(lines[row]+col,(char *)text);
     }
     byte_width=(font->Width+7u)/8u;
     for(k=0;text[k];++k) for(i=0;i<font->Height;++i) {
@@ -252,14 +261,17 @@ void LCD_DisplayStringAt(uint16_t x,uint16_t y,uint8_t *text,unsigned mode)
         offset=((unsigned)text[k]-32u)*font->Height*byte_width+(i<3u?0u:i-3u)*byte_width;
         bits=0u;
         if(i>=3u) for(j=0;j<byte_width;++j) bits=(bits<<8)|font->table[offset+j];
-        for(j=0;j<font->Width;++j) pixels[y+i][x+k*font->Width+j]=
-            (bits & (1u << (byte_width*8u-1u-j))) ? (foreground?255u:0u) : (background?255u:0u);
+        for(j=0;j<font->Width;++j) LCD_DrawPixel((uint16_t)(x+k*font->Width+j),(uint16_t)(y+i),
+            (bits & (1u << (byte_width*8u-1u-j))) ? foreground : background);
     }
 }
 static void save_image(const char *name)
 {
     FILE *f=fopen(name,"wb"); CHECK(f!=0);
-    fprintf(f,"P5\n480 272\n255\n"); fwrite(pixels,1,sizeof(pixels),f); fclose(f);
+    unsigned x,y;
+    fprintf(f,"P5\n480 272\n255\n");
+    for(y=0u;y<272u;++y) for(x=0u;x<480u;++x) fputc(pixels[271u-y][479u-x],f);
+    fclose(f);
 }
 static void test_bsp(void)
 {
@@ -328,221 +340,46 @@ static void test_bsp(void)
     CHECK(s.data.uart_ready && s.data.valid && aborts==i+1u);
 }
 
-static unsigned motor_sends, motion_sends;
-static unsigned app_commands[256];
-static uint8_t app_last[128], app_length;
-static int motor_send(void *ctx,const uint8_t *b,uint8_t n)
-{
-    (void)ctx; ++motor_sends;
-    ++app_commands[b[1]]; memcpy(app_last,b,n); app_length=n;
-    if(b[1]!=EMM_POSITION && b[1]!=EMM_SPEED && b[1]!=EMM_STATUS) ++motion_sends;
-    return 1;
-}
-static int motor_busy(void *ctx) { (void)ctx; return 0; }
+static int app_busy(void *ctx) { (void)ctx; return 0; }
 static int32_t touch_x,touch_y;
 static uint8_t touch_down;
 static unsigned touch_polls;
 void GTP_TouchProcess(void) { ++touch_polls; }
-/* Untimed legacy pixel fixtures explicitly finish the incremental job. The
-   review timing tests below use exactly one real QrApp step, with no drain. */
-static void finish_ui(QrUi *u,const QrService *q,const MotorBus *m,const FlowSnapshot *f,const GyroSnapshot *g,uint32_t now)
+static void finish_ui(QrUi *u,const QrService *q,const MotorBus *m,const GyroSnapshot *g,uint32_t now)
 {
-    unsigned budget=2048u;
-    do { QrUi_Process(u,q,m,f,g,now); } while(u->drawing && --budget);
-    CHECK(budget);
+    unsigned budget=4096u;
+    do { QrUi_Process(u,q,m,g,now); } while(u->drawing && --budget);
+    CHECK(budget && u->count<=UI_WIDGETS);
 }
 static void app_step(QrApp *a,uint32_t now)
 {
     tick=now; AppTouch_Report(0,touch_x,touch_y,touch_down); QrApp_Process(a,now);
     if(!lcd_timed) {
-        FlowSnapshot f; GyroSnapshot g;
-        Flow_GetSnapshot(&a->flow,tick,&f); Gyro_GetSnapshot(&a->gyro,tick,&g);
-        finish_ui(&a->ui,&a->qr,&a->motor,&f,&g,tick);
+        GyroSnapshot g;
+        Gyro_GetSnapshot(&a->gyro,tick,&g);
+        finish_ui(&a->ui,&a->qr,&a->motor,&g,tick);
     }
 }
-static void click(QrApp *a,int32_t x,int32_t y,uint32_t now)
-{ touch_x=x; touch_y=y; touch_down=1u; app_step(a,now); touch_down=0u; app_step(a,now+1u); }
-static void test_app_ui(void)
+static void advance(QrApp *a,unsigned duration)
 {
-    QrApp a;
-    MotorTransport t={0,motor_send,motor_busy};
-    uint32_t session,seq,now;
-    unsigned previous_draws,previous_clears;
-    QrApp_Init(&a,t,1u,2000u); app_step(&a,2000u);
-    CHECK(!a.ui.motor_page && a.qr.data.session==1u && !strcmp(lines[2],"--"));
-    CHECK(strstr(lines[1],"WAIT CODE")!=0); save_image("qr_wait.pgm");
-    previous_draws=draws; app_step(&a,2050u); app_step(&a,2100u);
-    CHECK(draws==previous_draws); /* unchanged rows do not redraw */
-    app_step(&a,12000u); CHECK(strstr(lines[1],"WAIT TIMEOUT")!=0);
-    inject("156+123+516+231\r\n",12001u,1); app_step(&a,12001u); app_step(&a,12101u);
-    CHECK(a.qr.data.valid && !strcmp(lines[2],sample)); save_image("qr_locked.pgm");
-    session=a.qr.data.session; seq=a.qr.data.accepted_seq;
-    click(&a,300,245,12200u); CHECK(a.ui.motor_page && a.qr.data.session==session);
-    CHECK(strstr(lines[0],"CHASSIS")!=0); save_image("qr_motor.pgm");
-    inject("123+312+321+123\r",12202u,1); app_step(&a,12202u);
-    CHECK(a.qr.data.ignored==1u && a.qr.data.accepted_seq==seq);
-    click(&a,300,245,12300u); CHECK(!a.ui.motor_page && !strcmp(lines[2],sample));
-    touch_x=20; touch_y=245; touch_down=1u;
-    app_step(&a,12400u); CHECK(!a.qr.data.valid && !strcmp(lines[2],"--"));
-    for(now=12401u;now<13000u;now+=20u) app_step(&a,now);
-    CHECK(a.qr.data.session==session+1u); /* a long press only rescans once */
-    AppTouch_Report(1,300,245,1u);
-    touch_down=0u; app_step(&a,13000u);
-    CHECK(a.qr.data.session==session+1u && a.ui.was_down); /* another finger holds the same gesture */
-    AppTouch_Report(1,300,245,0u); app_step(&a,13000u);
-    inject("156+123+516+231\r",13001u,1); app_step(&a,13001u); CHECK(a.qr.data.accepted_seq==seq+1u);
-    inject("bad\r",13002u,1); app_step(&a,13102u);
-    CHECK(a.qr.data.valid && strstr(lines[4],"INVALID CODE") && !strcmp(lines[2],sample));
-    save_image("qr_invalid_locked.pgm");
-    previous_clears=clears;
-    /* Press outside, drag into RESCAN, and keep held: never creates a new click. */
-    touch_x=0; touch_y=0; touch_down=1u; app_step(&a,13200u);
-    touch_x=20; touch_y=245; app_step(&a,13201u);
-    CHECK(a.qr.data.session==session+1u && clears==previous_clears);
-    touch_down=0; app_step(&a,13202u);
-    for(now=14000u;now<20000u;++now) app_step(&a,now);
-    CHECK(motor_pumps>1000u && motor_sends>3u && motion_sends==0u && touch_polls>10u);
-    a.qr.data.session=a.qr.data.raw_bytes=a.qr.data.records=a.qr.data.invalid_records=UINT32_MAX;
-    a.qr.data.overflows=a.qr.data.uart_errors=a.qr.data.duplicates=a.qr.data.ignored=UINT32_MAX;
-    a.qr.data.accepted_seq=a.qr.data.accepted_ms=a.qr.data.frame_timeouts=UINT32_MAX;
-    a.ui.redraw=1u; app_step(&a,20000u);
-    CHECK(bad_layout==0u); /* include maximum 32-bit counters and both font sizes */
-    QrApp_Init(&a,t,0u,21000u); finish_ui(&a.ui,&a.qr,&a.motor,0,0,21000u);
-    CHECK(strstr(lines[1],"UART ERROR")!=0 && !strcmp(lines[2],"--"));
-    save_image("qr_uart_error.pgm");
-    QrApp_Init(&a,t,1u,22000u); CHECK(!a.qr.data.valid && a.qr.data.session==1u);
-    click(&a,300,245,22001u); CHECK(a.ui.motor_page);
-    inject("156+123+516+231\r",22003u,1); app_step(&a,22003u);
-    CHECK(a.qr.data.valid && a.qr.data.session==1u);
-    click(&a,300,245,22100u); CHECK(!a.ui.motor_page && !strcmp(lines[2],sample));
-    CHECK(trig_lows >= 5u); /* QrApp_Process keeps the trigger waveform running */
-}
-static void test_seven_ui(void)
-{
-    QrApp a; MotorTransport t={0,motor_send,motor_busy};
-    unsigned i, before=motion_sends;
-    QrApp_Init(&a,t,1u,30000u);
-    click(&a,300,245,30000u);
-    CHECK(a.ui.motor_page && !a.motor.manual);
-    CHECK(!strcmp(lines[0],a.ui.detail ? "MOTOR READ ONLY" : "CHASSIS [tap] / MOTOR"));
-    for(i=0;i<7u;++i) CHECK(strstr(lines[i+1u],MotorBus_Role((uint8_t)(i+1u))) && strstr(lines[i+1u],"--"));
-    save_image("motor_seven_wait.pgm");
-    click(&a,20,140,30002u); CHECK(a.ui.detail && a.ui.selected==4u);
-    CHECK(strstr(lines[2],"--"));
-    click(&a,20,245,30004u); CHECK(a.motor.manual && strstr(lines[0],"MANUAL"));
-    CHECK(!strcmp(lines[0],"MOTOR MANUAL / STOP READY"));
-    click(&a,20,140,30006u); CHECK(a.ui.test_action==1u);
-    click(&a,20,184,30008u);
-    CHECK(motion_sends==before);
-#if MOTOR_TEST_CONFIGURED
-    CHECK(strstr(a.motor.message,"NEED"));
-#elif MOTOR_BENCH_JOG_ENABLED
-    /* Bench jog reaches Submit but still requires healthy feedback. */
-    CHECK(strstr(a.motor.message,"NEED"));
-#else
-    CHECK(strstr(a.motor.message,"CONFIGURE"));
-#endif
-    /* UI edge detection applies equally to one-shot position and group actions. */
-    a.ui.test_action=2u;
-    CHECK(QrUi_Touch(&a.ui,20,184,1u)==QR_UI_RUN);
-    CHECK(QrUi_Touch(&a.ui,20,184,1u)==QR_UI_NONE);
-    CHECK(QrUi_Touch(&a.ui,20,184,0u)==QR_UI_NONE);
-    CHECK(QrUi_Touch(&a.ui,170,245,1u)==QR_UI_STOP_ALL);
-    (void)QrUi_Touch(&a.ui,170,245,0u);
-    CHECK(QrUi_Touch(&a.ui,300,184,1u)==QR_UI_STOP_AXIS);
-    (void)QrUi_Touch(&a.ui,300,184,0u);
-    a.motor.nodes[4].data.valid=7u; a.motor.nodes[4].data.online=1u;
-    a.motor.nodes[4].data.position_counts=-INT64_C(4294967295);
-    a.motor.nodes[4].target_counts=INT64_C(4294967295); a.motor.nodes[4].target_known=1u;
-    a.motor.nodes[4].data.speed_rpm=INT32_MIN;
-    a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,0,0,UINT32_MAX);
-    CHECK(!bad_layout && strstr(lines[2],"-4294967295")); save_image("motor_detail_stale.pgm");
-    a.ui.detail=0; a.ui.redraw=1u;
-    for(i=0;i<7u;++i) {
-        MotorSnapshot *d=&a.motor.nodes[i].data;
-        d->valid=7u; d->online=1u; d->speed_rpm=(int32_t)i*10;
-        d->status_flags=3u; d->speed_ms=d->status_ms=31000u;
-    }
-    finish_ui(&a.ui,&a.qr,&a.motor,0,0,31000u); save_image("motor_seven_online.pgm");
-    click(&a,20,245,31002u); CHECK(!a.motor.manual && a.motor.stop_mask);
-    {
-        unsigned x,y;
-        CHECK(!strcmp(lines[0],a.ui.detail ? "MOTOR READ ONLY" : "CHASSIS [tap] / MOTOR"));
-        for(y=8u;y<24u;++y) for(x=8u+(unsigned)strlen(lines[0])*Font16.Width;x<312u;++x) CHECK(!pixels[y][x]);
-    }
-    CHECK(!bad_layout);
-}
-#if MOTOR_TEST_CONFIGURED
-static void manual_fixture(QrApp *a,uint32_t now,uint8_t action,uint8_t selected)
-{
-    MotorTransport t={0,motor_send,motor_busy}; unsigned i,j;
-    QrApp_Init(a,t,1u,now); a->ui.motor_page=a->ui.detail=1u;
-    a->ui.test_action=action; a->ui.selected=selected;
-    MotorBus_SetManual(&a->motor,1u,now);
-    for(i=0;i<7u;++i) {
-        MotorSnapshot *d=&a->motor.nodes[i].data;
-        d->valid=7u; d->online=1u; d->status_flags=3u; d->rx_count=1u;
-        d->position_ms=d->speed_ms=d->status_ms=d->last_rx_ms=now;
-        for(j=0;j<3u;++j) a->motor.nodes[i].poll_due[j]=now+10000u;
+    uint32_t end=tick+duration,at,spent;
+    while((int32_t)(tick-end)<0) {
+        at=tick+1u; app_step(a,at); spent=tick-at;
+        if(spent>lcd_max_step) lcd_max_step=spent;
     }
 }
-static void test_configured_actions(void)
+/* Test clicks use the mounted, human-visible coordinate system. */
+static void press(QrApp *a,int32_t x,int32_t y)
 {
-    QrApp a; unsigned before; uint32_t now;
-    manual_fixture(&a,40000u,2u,4u); before=app_commands[EMM_MOVE];
-    touch_x=20; touch_y=184; touch_down=1u;
-    for(now=40000u;now<40040u;++now) app_step(&a,now);
-    CHECK(app_commands[EMM_MOVE]==before+1u && app_last[0]==5u && app_last[10]==2u);
-    touch_down=0u; app_step(&a,40040u);
-    manual_fixture(&a,41000u,1u,6u); before=app_commands[EMM_VELOCITY];
-    click(&a,20,184,41000u);
-    CHECK(app_commands[EMM_VELOCITY]==before+1u && app_last[0]==7u && app_length==8u);
-    manual_fixture(&a,42000u,3u,0u); before=app_commands[EMM_MULTI];
-    click(&a,20,184,42000u);
-    CHECK(app_commands[EMM_MULTI]==before+1u && app_length==37u && app_last[3]==37u);
-    manual_fixture(&a,43000u,4u,0u); before=app_commands[EMM_SYNC];
-    click(&a,20,184,43000u); CHECK(app_commands[EMM_SYNC]==before && strstr(a.motor.message,"LOCKED"));
-    CHECK(!bad_layout);
+    touch_x=479-x; touch_y=271-y; touch_down=1u; advance(a,1u);
+    touch_down=0u; advance(a,1u);
 }
-#endif
-#if !MOTOR_TEST_CONFIGURED && MOTOR_BENCH_JOG_ENABLED
-static void bench_jog_fixture(QrApp *a,uint32_t now,uint8_t action,uint8_t selected)
+static int contains(const QrUi *u,const char *text)
 {
-    MotorTransport t={0,motor_send,motor_busy}; unsigned i,j;
-    QrApp_Init(a,t,1u,now); a->ui.motor_page=a->ui.detail=1u;
-    a->ui.test_action=action; a->ui.selected=selected;
-    MotorBus_SetManual(&a->motor,1u,now);
-    for(i=0;i<7u;++i) {
-        MotorSnapshot *d=&a->motor.nodes[i].data;
-        d->valid=7u; d->online=1u; d->status_flags=3u; d->rx_count=1u;
-        d->position_ms=d->speed_ms=d->status_ms=d->last_rx_ms=now;
-        for(j=0;j<3u;++j) a->motor.nodes[i].poll_due[j]=now+10000u;
-    }
+    unsigned i;
+    for(i=0u;i<u->count;++i) if(strstr(u->target[i].text,text)) return 1;
+    return 0;
 }
-/* MOTOR_TEST_CONFIGURED=0 keeps POSITION/WHEELS/SYNC gated but allows an
-   explicit MANUAL + RUN ONCE single-axis SPEED jog. */
-static void test_bench_jog(void)
-{
-    QrApp a; unsigned before;
-    bench_jog_fixture(&a,50000u,1u,0u); before=app_commands[EMM_VELOCITY];
-    click(&a,20,184,50000u);
-    CHECK(app_commands[EMM_VELOCITY]==before+1u && app_last[0]==1u && app_length==8u &&
-        app_last[2]==MOTOR_TEST_DIRECTION && app_last[5]==MOTOR_TEST_ACCELERATION);
-    bench_jog_fixture(&a,51000u,2u,4u); before=app_commands[EMM_MOVE];
-    click(&a,20,184,51000u);
-    CHECK(app_commands[EMM_MOVE]==before && strstr(a.motor.message,"CONFIGURE"));
-    bench_jog_fixture(&a,52000u,3u,0u); before=app_commands[EMM_MULTI];
-    click(&a,20,184,52000u);
-    CHECK(app_commands[EMM_MULTI]==before && strstr(a.motor.message,"CONFIGURE"));
-    bench_jog_fixture(&a,53000u,4u,0u); before=app_commands[EMM_SYNC];
-    click(&a,20,184,53000u);
-    CHECK(app_commands[EMM_SYNC]==before && strstr(a.motor.message,"CONFIGURE"));
-    CHECK(!bad_layout);
-}
-#endif
-void FlowTest_Fail(unsigned value);
-unsigned FlowTest_Bursts(void);
-
 /* Application fixture uses the real QrApp/MotorBus while simulating four motors. */
 static struct {
     uint8_t bytes[128], pending, online, flags[7], reject_enable, drop_velocity;
@@ -600,326 +437,298 @@ static void app_reply(MotorBus *bus,uint32_t now)
 }
 static void app_fixture(QrApp *a,uint32_t now)
 {
-    MotorTransport t={0,app_send,motor_busy};
+    MotorTransport t={0,app_send,app_busy};
     memset(&app_motor,0,sizeof(app_motor)); app_motor.online=0x0Fu;
     memset(app_motor.flags,2,sizeof(app_motor.flags)); motor_pump_hook=app_reply;
     touch_down=0u; tick=now; BspQrTrigger_Init();
     QrApp_Init(a,t,1u,now);
     CHECK(a->chassis.data.state==CHASSIS_DISARMED && !a->motor.manual);
 }
-static void test_chassis_screen(void)
+static void test_orientation(void)
 {
-    QrApp a; uint32_t now, id;
-    CHECK(BspQrUart_Init()); app_fixture(&a,0u);
-    for(now=0u;now<8000u;++now) app_step(&a,now);
-    CHECK(!app_motor.count && a.chassis.data.state==CHASSIS_DISARMED);
-    /* Exercise explicit unconfigured state even when the local vehicle config
-       has been filled in by the user. Do not rewrite the production header. */
-    a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=0u;
-    a.chassis.config.wheel_diameter_mm=a.chassis.config.length_mm=a.chassis.config.width_mm=0.0f;
-    a.chassis.config.gear_ratio=0.0f; memset(a.chassis.config.motor_sign,0,sizeof(a.chassis.config.motor_sign));
-    a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=0.0f;
-    click(&a,300,245,now); click(&a,20,14,now+2u);
-    CHECK(a.ui.chassis_page && strstr(lines[0],"CHASSIS"));
-    id=a.chassis.data.request_id;
-    click(&a,20,245,now+4u);
-    CHECK(a.chassis.data.rejection==CHASSIS_CONFIG && a.chassis.data.request_id==id);
-    for(now+=6u;now<10000u;++now) app_step(&a,now);
-    CHECK(!app_motor.count && strstr(lines[8],"CONFIG REQUIRED"));
-    save_image("chassis_config.pgm");
-    click(&a,420,14,now); CHECK(a.ui.flow_page);
-    click(&a,300,245,now+2u); CHECK(a.ui.chassis_page && !a.ui.flow_page);
-    click(&a,20,14,now+4u); CHECK(a.ui.chassis_detail);
-    save_image("chassis_wheels.pgm");
-    click(&a,170,245,now+6u);
-    for(now+=8u;now<12000u;++now) app_step(&a,now);
-    CHECK(app_motor.count && app_motor.code[0]==EMM_STOP);
-    CHECK(!a.motor.wheels_pending && !a.chassis.data.sequence_active);
-    CHECK(!bad_layout);
-    /* Render latched failure beside CURRENT healthy sensor indicators. The
-       historical cause must remain readable after live flow has recovered. */
-    a.chassis.config.mechanical_confirmed=a.chassis.config.feedback_confirmed=1u;
-    a.chassis.config.wheel_diameter_mm=100; a.chassis.config.length_mm=200; a.chassis.config.width_mm=180;
-    a.chassis.config.gear_ratio=1; a.chassis.config.flow_x_mm_count=a.chassis.config.flow_y_mm_count=1;
-    { unsigned i; for(i=0u;i<4u;++i) a.chassis.config.motor_sign[i]=1; }
-    a.chassis.data.state=CHASSIS_FAULT; a.chassis.data.result=CHASSIS_FAILED;
-    a.chassis.data.reason=CHASSIS_FLOW_INVALID; a.chassis.data.stage=1u;
-    a.chassis.data.flow_valid=a.chassis.data.gyro_valid=1u; a.chassis.data.stop_pending=0u;
-    a.chassis.data.fault.valid=1u; a.chassis.data.fault.issue=CHASSIS_ODOM_SYNC_TIMEOUT;
-    a.chassis.data.fault.quality=150u; a.chassis.data.fault.paired_age_ms=105u;
-    a.ui.chassis_detail=0u; a.ui.redraw=1u;
-    finish_ui(&a.ui,&a.qr,&a.motor,0,0,now);
-    CHECK(!strcmp(lines[8],"FLOW INVALID: TIME ALIGN") && strstr(lines[7],"AT Q:150"));
-    CHECK(!bad_layout); save_image("chassis_flow_fault.pgm");
-    puts("PASS: no power-on motion, chassis screen/config/edge/back/global STOP");
+    uint16_t x,y,w,h; unsigned i;
+    for(i=0u;i<4u;++i) {
+        x=(uint16_t)(i&1u ? 479u : 0u); y=(uint16_t)(i&2u ? 271u : 0u); w=h=1u;
+        CHECK(Lcd_OrientRect(&x,&y,&w,&h,480,272));
+        CHECK(x==(i&1u ? 0u : 479u) && y==(i&2u ? 0u : 271u));
+        CHECK(Lcd_OrientRect(&x,&y,&w,&h,480,272));
+        CHECK(x==(i&1u ? 479u : 0u) && y==(i&2u ? 271u : 0u));
+    }
+    x=8; y=232; w=88; h=32;
+    CHECK(Lcd_OrientRect(&x,&y,&w,&h,480,272) && x==384u && y==8u);
+    x=478; y=270; w=h=100;
+    CHECK(Lcd_OrientRect(&x,&y,&w,&h,480,272) && !x && !y && w==2u && h==2u);
+    x=480; CHECK(!Lcd_OrientRect(&x,&y,&w,&h,480,272));
 }
-
-static void test_flow_ui(void)
+static void validate_widgets(const QrUi *u)
 {
-    QrApp a; MotorTransport t={0,motor_send,motor_busy};
-    FlowSnapshot d; uint32_t now; unsigned before=motion_sends, n; uint32_t session;
-    QrApp_Init(&a,t,1u,80000u); click(&a,420,14,80000u);
-    CHECK(a.ui.flow_page && !a.ui.motor_page && strstr(lines[1],"INIT")); save_image("flow_init.pgm");
-    for (now=80002u;now<81000u;++now) app_step(&a,now);
-    CHECK(a.flow.data.valid && strstr(lines[1],"READY") && !a.motor.manual && motion_sends==before);
-    save_image("flow_ready.pgm");
-    inject("156+123+516+231\r",81000u,1); app_step(&a,81000u);
-    CHECK(a.qr.data.valid); session=a.qr.data.session;
-    touch_x=20; touch_y=245; touch_down=1u;
-    for(now=81001u;now<81500u;++now) app_step(&a,now);
-    CHECK(a.flow.data.clears==1u && a.flow.data.zero_sequence>0u && a.qr.data.session==session);
-    CHECK(motion_sends==before && !a.motor.manual);
-    touch_down=0; app_step(&a,81500u);
-    click(&a,20,184,81501u); CHECK(motion_sends==before && !a.ui.detail); /* no motor row hit */
-    click(&a,420,14,81503u); CHECK(a.ui.flow_detail); save_image("flow_diagnostics.pgm");
-    FlowTest_Fail(1u);
-    for(now=81505u;now<81700u;++now) app_step(&a,now);
-    CHECK(a.flow.data.state==FLOW_ERROR && a.qr.data.valid && motion_sends==before);
-    save_image("flow_error.pgm");
-    click(&a,300,245,81700u); CHECK(!a.ui.flow_page && !a.ui.motor_page && !strcmp(lines[2],sample));
-    FlowTest_Fail(0u);
-    for(now=81702u;now<83500u;++now) app_step(&a,now);
-    CHECK(a.flow.data.valid && a.flow.data.segments==2u && a.flow.data.gaps && a.qr.data.valid);
-    n=FlowTest_Bursts(); click(&a,300,245,83500u); CHECK(a.ui.motor_page);
-    click(&a,420,14,83502u); CHECK(a.ui.flow_page && a.ui.motor_page);
-    CHECK(QrUi_Touch(&a.ui,20,184,1u)==QR_UI_NONE); (void)QrUi_Touch(&a.ui,20,184,0u);
-    for(now=83504u;now<83600u;++now) app_step(&a,now);
-    CHECK(FlowTest_Bursts()>n && !a.motor.manual);
-    /* Full 64-bit totals and maximum counters fit, including every diagnostic row. */
-    Flow_GetSnapshot(&a.flow,83600u,&d);
-    d.total_x=INT64_MIN; d.total_y=INT64_MAX;
-    d.accepted=d.rejected=d.errors=d.segments=d.gaps=d.missed=UINT32_MAX;
-    d.sequence=d.zero_sequence=d.max_process_us=d.max_interval_ms=d.clears=UINT32_MAX;
-    a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,&d,0,83600u);
-    CHECK(strstr(lines[3],"-9223372036854775808") && !bad_layout); save_image("flow_limits.pgm");
-    a.ui.flow_detail=1u; a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,&d,0,83600u); CHECK(!bad_layout);
-    click(&a,170,245,83601u); CHECK(a.motor.stop_mask && !a.motor.manual); /* global STOP on FLOW */
-    click(&a,300,245,83603u); CHECK(!a.ui.flow_page && a.ui.motor_page);
-    CHECK(a.qr.data.valid && a.qr.data.session==session);
-    CHECK(!bad_layout);
-    printf("FLOW concurrent UI: interval max %lu ms, missed %lu, process max %lu us (simulated)\n",
-        (unsigned long)a.flow.data.max_interval_ms,(unsigned long)a.flow.data.missed,(unsigned long)a.flow.data.max_process_us);
-}
-
-static void test_gyro_ui(void)
-{
-    QrApp a; MotorTransport t={0,motor_send,motor_busy}; uint32_t now,seq,session;
-    unsigned before=motion_sends,requests,cleared; GyroSnapshot d;
-    QrApp_Init(&a,t,1u,110000u); click(&a,340,14,110000u);
-    CHECK(a.ui.gyro_page && !a.ui.motor_page && strstr(lines[1],"INIT")); save_image("gyro_init.pgm");
-    for(now=110002u;now<111000u;++now) app_step(&a,now);
-    CHECK(a.gyro.data.raw_valid && !a.gyro.data.calibrated && strstr(lines[1],"UNCAL"));
-    CHECK(strstr(lines[2],"--") && strstr(lines[3],"--")); save_image("gyro_uncal.pgm");
-    inject("156+123+516+231\r",111000u,1); app_step(&a,111000u);
-    CHECK(a.qr.data.valid); session=a.qr.data.session; cleared=a.flow.data.clears;
-    click(&a,108,245,111001u); CHECK(!a.gyro.data.zeros); /* ZERO rejected before CAL */
-    touch_x=20; touch_y=245; touch_down=1u;
-    for(now=111003u;now<113500u;++now) app_step(&a,now);
-    printf("GYRO UI cal: req %lu state %u count %lu gap %lu dt %lu raw %u\n",
-        (unsigned long)a.gyro.data.cal_requests,(unsigned)a.gyro.data.calibration,(unsigned long)a.gyro.data.cal_count,
-        (unsigned long)a.gyro.data.gaps,(unsigned long)a.gyro.data.max_interval_ms,a.gyro.data.raw_valid);
-    CHECK(a.gyro.data.cal_requests==1u && a.gyro.data.calibration==GYRO_CAL_DONE);
-    CHECK(a.gyro.data.angle_valid && a.gyro.data.rate_valid && !a.motor.manual);
-    CHECK(motion_sends==before && a.flow.data.clears==cleared && a.qr.data.session==session);
-    save_image("gyro_ready.pgm"); touch_down=0u; app_step(&a,113500u);
-    requests=a.gyro.data.cal_requests; touch_x=108; touch_down=1u;
-    for(now=113501u;now<114000u;++now) app_step(&a,now);
-    CHECK(a.gyro.data.zeros==1u && a.gyro.data.cal_requests==requests && motion_sends==before);
-    touch_down=0u; app_step(&a,114000u);
-    click(&a,420,14,114001u); CHECK(a.ui.gyro_detail); save_image("gyro_diagnostics.pgm");
-    click(&a,300,245,114003u); CHECK(!a.ui.gyro_page && !a.ui.motor_page && !a.ui.flow_page);
-    seq=a.gyro.data.sequence;
-    for(now=114005u;now<114500u;++now) app_step(&a,now);
-    CHECK(a.gyro.data.sequence>seq && a.qr.data.valid); /* background sampling */
-    click(&a,300,245,114500u); CHECK(a.ui.motor_page);
-    click(&a,340,14,114502u); CHECK(a.ui.gyro_page && a.ui.motor_page);
-    click(&a,20,184,114504u); CHECK(motion_sends==before && !a.ui.detail);
-    GyroTest_Fail(1u);
-    for(now=114506u;now<114700u;++now) app_step(&a,now);
-    CHECK(a.gyro.data.state==GYRO_ERROR && !a.gyro.data.angle_valid && a.qr.data.valid);
-    save_image("gyro_error.pgm"); GyroTest_Fail(0u);
-    for(now=114700u;now<115400u;++now) app_step(&a,now);
-    CHECK(a.gyro.data.raw_valid && !a.gyro.data.calibrated && !a.gyro.data.angle_valid);
-    CHECK(motion_sends==before && a.flow.data.clears==cleared && a.qr.data.session==session);
-    /* Max counters and invalid numbers fit the actual font, all rows. */
-    Gyro_GetSnapshot(&a.gyro,115400u,&d);
-    d.sequence=d.interval_ms=d.age_ms=d.max_interval_ms=d.max_poll_ms=d.max_process_us=UINT32_MAX;
-    d.missed=d.gaps=d.errors=d.saturations=d.invalid=d.restarts=d.cal_count=UINT32_MAX;
-    a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,0,&d,115400u);
-    a.ui.gyro_detail=1u; a.ui.redraw=1u; finish_ui(&a.ui,&a.qr,&a.motor,0,&d,115400u);
-    CHECK(!bad_layout);
-    click(&a,170,245,115401u); CHECK(a.motor.stop_mask); /* global STOP still available */
-    click(&a,300,245,115403u); CHECK(!a.ui.gyro_page && a.ui.motor_page);
-    CHECK(a.qr.data.valid && a.qr.data.session==session && a.flow.data.clears==cleared);
-}
-
-static void review_advance(QrApp *a,unsigned duration)
-{
-    uint32_t end=tick+duration,at,spent;
-    while((int32_t)(tick-end)<0) {
-        at=tick+1u; app_step(a,at); spent=tick-at;
-        if(spent>lcd_max_step) lcd_max_step=spent;
+    unsigned i;
+    CHECK(u->count<=UI_WIDGETS);
+    for(i=0u;i<u->count;++i) {
+        const UiWidget *v=&u->target[i]; const unsigned char *p=(const unsigned char *)v->text;
+        unsigned width=0u,lines_count=1u;
+        CHECK(v->x+v->width<=480u && v->y+v->height<=272u);
+        while(*p) {
+            if(*p=='\n') { CHECK(width<=v->width); width=0u; ++lines_count; ++p; }
+            else if(*p<128u) { width+=v->large ? Font24.Width : Font16.Width; ++p; }
+            else { CHECK(p[1] && p[2]); width+=20u; p+=3; }
+        }
+        if(width>v->width) fprintf(stderr,"OVERFLOW: %s width %u / %u\n",v->text,width,v->width);
+        CHECK(width<=v->width);
+        CHECK((lines_count-1u)*24u+(v->large ? 24u : 20u)<=v->height);
     }
 }
-static void review_press(QrApp *a,int32_t x,int32_t y)
-{ touch_x=x; touch_y=y; touch_down=1u; review_advance(a,1u); touch_down=0u; review_advance(a,1u); }
-static void test_review_ui(void)
+static void test_dashboard(void)
 {
-    QrApp a; MotorTransport t={0,motor_send,motor_busy}; unsigned before,pumps; uint32_t seq;
-    tick=1000u; CHECK(BspQrUart_Init()); QrApp_Init(&a,t,1u,tick);
-    review_advance(&a,800u); review_press(&a,340,14); review_advance(&a,500u);
-    lcd_timed=1u; before=clears; review_press(&a,20,245); review_advance(&a,2800u);
-    CHECK(a.gyro.data.calibration==GYRO_CAL_DONE && a.gyro.data.angle_valid);
-    CHECK(clears==before); /* CAL/ZERO do not request full-screen clear */
-    review_press(&a,108,245); review_advance(&a,100u);
-    CHECK(a.gyro.data.zeros==1u && a.gyro.data.angle_valid);
-    review_press(&a,420,14); review_advance(&a,700u); CHECK(a.gyro.data.angle_valid);
-    review_press(&a,300,245); review_advance(&a,700u); CHECK(a.gyro.data.angle_valid);
-    review_press(&a,420,14); review_advance(&a,700u); CHECK(a.ui.flow_page && a.gyro.data.angle_valid);
-    review_press(&a,20,245); review_press(&a,420,14); review_advance(&a,700u);
-    seq=a.gyro.data.sequence; pumps=motor_pumps;
-    /* Cancel several incomplete page jobs; every step still services the app. */
-    review_press(&a,340,14); review_press(&a,300,245); review_press(&a,300,245);
-    review_press(&a,300,245); review_press(&a,300,245); review_advance(&a,700u);
-    CHECK(a.gyro.data.sequence>seq && motor_pumps>pumps && a.gyro.data.angle_valid);
-    inject("156+123+516+231\r",tick,1); review_advance(&a,700u); CHECK(a.qr.data.valid);
-    CHECK(lcd_max_step<=2u && !bad_layout);
-    printf("UI injected: max step=%u ms gyro poll=%lu dt=%lu missed=%lu pumps=%u\n",lcd_max_step,
-        (unsigned long)a.gyro.data.max_poll_ms,(unsigned long)a.gyro.data.max_interval_ms,
-        (unsigned long)a.gyro.data.missed,motor_pumps-pumps);
-    /* A genuinely oversized primitive must still break continuity. */
-    lcd_overrun=1u; a.ui.redraw=1u; review_advance(&a,30u);
-    CHECK(!a.gyro.data.angle_valid && a.gyro.data.angle_gap);
-    lcd_overrun=0u; lcd_timed=0u;
-    puts("PASS: timed UI CAL/ZERO/pages/updates/cancellation and true GAP");
-}
-static void test_review_gate(void)
-{
-    QrApp a; MotorTransport t={0,motor_send,motor_busy}; MotorNode *n;
-    tick=1000u; CHECK(BspQrUart_Init()); QrApp_Init(&a,t,1u,tick);
-    review_advance(&a,800u); review_press(&a,340,14); n=&a.motor.nodes[6];
-    n->data.valid=MOTOR_VALID_SPEED; n->data.speed_rpm=10; n->data.speed_ms=tick;
-    review_press(&a,20,245); CHECK(!strcmp(Gyro_CalName(a.gyro.data.calibration),"MOTOR ACTIVE"));
-    n->data.speed_ms=tick-10000u;
-    review_press(&a,20,245); CHECK(!strcmp(Gyro_CalName(a.gyro.data.calibration),"MOTOR UNKNOWN"));
-    n->data.valid=0u; n->action=MOTOR_UNKNOWN;
-    review_press(&a,20,245); CHECK(!strcmp(Gyro_CalName(a.gyro.data.calibration),"MOTOR UNKNOWN"));
-    n->action=MOTOR_IDLE; MotorBus_Stop(&a.motor,0x40u,tick);
-    review_press(&a,20,245); CHECK(!strcmp(Gyro_CalName(a.gyro.data.calibration),"STOP UNCONF"));
-    /* A new bench session, never connected/commanded nodes, remains usable. */
-    QrApp_Init(&a,t,1u,tick); review_advance(&a,800u); review_press(&a,340,14);
-    review_press(&a,20,245); review_advance(&a,2300u); CHECK(a.gyro.data.calibration==GYRO_CAL_DONE);
-    puts("PASS: calibration motion/unknown/stop/absent bench gates");
-}
-static void test_review_parallel(void)
-{
-    QrApp a; uint32_t start,next_scan,stop_at,latency; unsigned phase=0u,i,before;
-    CHECK(BspQrUart_Init()); app_fixture(&a,200000u); app_motor.online=MOTOR_ALL;
-    lcd_timed=trigger_measure=1u; trigger_have=0u; trigger_max_jitter=0u; lcd_max_step=0u;
-    start=tick; next_scan=tick;
-    while(tick-start<15000u) {
-        uint32_t elapsed=tick-start;
-        if((int32_t)(tick-next_scan)>=0) { inject("156+123+516+231\r",tick,1); next_scan+=100u; }
-        if(phase==0u && elapsed>=300u) { review_press(&a,340,14); ++phase; }
-        if(phase==1u && elapsed>=900u) { review_press(&a,420,14); ++phase; }
-        if(phase==2u && elapsed>=1500u) { review_press(&a,300,245); ++phase; }
-        if(phase==3u && elapsed>=2100u) { review_press(&a,420,14); ++phase; }
-        if(phase==4u && elapsed>=2700u) { review_press(&a,20,245); ++phase; }
-        if(phase==5u && elapsed>=3300u) { review_press(&a,300,245); ++phase; }
-        if(phase==6u && elapsed>=10000u) {
-            CHECK(a.chassis.data.state==CHASSIS_DISARMED && !app_motor.count);
-            review_press(&a,340,14); review_press(&a,20,245); ++phase;
-        }
-        if(phase==7u && elapsed>=13000u) {
-            CHECK(a.gyro.data.calibration==GYRO_CAL_DONE && a.gyro.data.angle_valid);
-            review_press(&a,108,245); review_press(&a,420,14); ++phase;
-        }
-        review_advance(&a,1u);
+    QrApp a; unsigned i,before,pumps; uint32_t session;
+    CHECK(BspQrUart_Init()); app_fixture(&a,100000u); app_motor.online=MOTOR_ALL;
+    advance(&a,2500u); CHECK(a.ui.page==UI_HOME && !a.ui.more && !app_motor.count);
+    CHECK(contains(&a.ui,"\347\255\211\345\276\205\346\234\272\346\236\204\345\260\261\347\273\252") && contains(&a.ui,"7/7 ONLINE"));
+    CHECK(!a.motor.manual); validate_widgets(&a.ui); save_image("dashboard_home.pgm");
+    session=a.qr.data.session; pumps=motor_pumps;
+    inject("156+123+516+231\r",tick,1); advance(&a,200u);
+    CHECK(a.qr.data.valid && contains(&a.ui,sample));
+    press(&a,32,120); CHECK(a.ui.page==UI_MOTOR && !a.ui.more);
+    before=app_motor.count;
+    for(i=0u;i<7u;++i) {
+        press(&a,32,50+(int)i*24); CHECK(a.ui.more && a.ui.selected==i);
+        press(&a,200,210); CHECK(a.ui.selected==(i+1u)%7u);
+        press(&a,32,210); CHECK(a.ui.selected==i);
+        press(&a,420,18); CHECK(!a.ui.more);
     }
-    CHECK(phase==8u && a.gyro.data.angle_valid && a.qr.data.duplicates>140u && a.flow.data.valid);
-    for(i=0u;i<7u;++i) CHECK(a.motor.nodes[i].data.online);
-    before=app_motor.count; stop_at=tick;
-    review_press(&a,170,245); review_advance(&a,50u);
-    CHECK(app_motor.count>before && app_motor.code[before]==EMM_STOP);
-    latency=app_motor.at[before]-stop_at; CHECK(latency<=15u);
-    CHECK(lcd_max_step<=2u && trigger_max_jitter<=3u);
-    printf("TIMED PARALLEL (injected): UI %u ms poll %lu ms dt %lu ms missed %lu STOP %lu ms trigger jitter %lu ms QR %lu\n",
-        lcd_max_step,(unsigned long)a.gyro.data.max_poll_ms,(unsigned long)a.gyro.data.max_interval_ms,
-        (unsigned long)a.gyro.data.missed,(unsigned long)latency,(unsigned long)trigger_max_jitter,
-        (unsigned long)a.qr.data.duplicates);
-    lcd_timed=trigger_measure=0u;
+    /* Former manual/run/cycle locations now only select telemetry. */
+    for(i=0u;i<8u;++i) { press(&a,20,140); press(&a,20,184); press(&a,420,18); }
+    CHECK(app_motor.count==before && !a.motor.manual);
+    for(i=0u;i<6u;++i) {
+        static const uint8_t pages[]={UI_MOTOR,UI_GYRO,UI_QR,UI_SERVO,UI_VISION,UI_MECHANISM};
+        press(&a,40,248); press(&a,40+(int)(i%3u)*158,120+(int)(i/3u)*62);
+        CHECK(a.ui.page==pages[i]); validate_widgets(&a.ui);
+        press(&a,420,18); CHECK(a.ui.more); validate_widgets(&a.ui);
+        press(&a,420,18); CHECK(!a.ui.more);
+    }
+    press(&a,140,248); CHECK(a.ui.page==UI_CHASSIS && !a.ui.more);
+    press(&a,240,248); CHECK(a.ui.page==UI_MECHANISM);
+    press(&a,330,248); CHECK(a.ui.page==UI_LIMITS);
+    limit_levels[0]=1u; advance(&a,100u);
+    CHECK(contains(&a.ui,"\346\214\211\344\270\213 / \346\226\255\350\267\257") && contains(&a.ui,"\351\207\212\346\224\276"));
+    press(&a,420,18); CHECK(contains(&a.ui,"NC"));
+    limit_levels[0]=0u; advance(&a,100u);
+    CHECK(a.qr.data.session==session && a.qr.data.valid && motor_pumps>pumps);
+    /* Invalid press never causes a new action by sliding into a button. */
+    touch_x=-1; touch_y=0; touch_down=1; advance(&a,1u);
+    touch_x=479-420; touch_y=271-248; advance(&a,1u);
+    CHECK(!a.motor.stop_mask); touch_down=0; advance(&a,1u);
+    press(&a,420,248); CHECK(a.motor.nodes[6].stop_unconfirmed);
+    advance(&a,2000u); CHECK(!a.motor.wheels_pending && !a.chassis.data.sequence_active);
+    CHECK(!bad_layout);
+    puts("PASS: dashboard navigation, MORE, all 7 read-only motors, limits, locked QR and rotated STOP");
 }
-static void test_chassis_active(void)
+static void render_pages(void)
 {
-    QrApp a; ChassisConfig cfg; uint32_t start,next_command,next_scan,cleared,zeros,requests;
-    unsigned phase=0u,i,groups;
+    QrApp a; GyroSnapshot g={0}; unsigned page,more,i;
+    static const char * const names[]={"home","motor","gyro","qr","servo","vision","chassis","arm","limits","race"};
+    app_fixture(&a,200000u); receive(&a.qr,"156+123+516+231\r",tick);
+    a.mechanism.auto_pending=0u;
+    for(i=0u;i<7u;++i) {
+        MotorSnapshot *d=&a.motor.nodes[i].data;
+        d->online=1u; d->valid=7u; d->rx_count=3u; d->status_flags=3u;
+        d->position_ms=d->speed_ms=d->status_ms=tick;
+    }
+    g.state=GYRO_RUNNING; g.calibrated=g.rate_valid=g.angle_valid=g.raw_valid=g.have_sample=1u;
+    g.axis=2; g.sign=1; g.angle_deg=-12.34; g.raw_dps=15.86f; g.bias_dps=15.86f;
+    a.chassis.odometry.valid=1; a.chassis.odometry.x=123.45; a.chassis.odometry.y=-67.89;
+    a.chassis.odometry.angle=-12.34; a.chassis.odometry.sample_ms=tick;
+    a.mechanism.data.reference[0]=a.mechanism.data.reference[1]=MECH_HOMED;
+    a.mechanism.data.reference[2]=MECH_HOMED; a.mechanism.data.trim_ready=1u;
+    a.mechanism.data.position[0]=45.25; a.mechanism.data.position[1]=12.5; a.mechanism.data.position[2]=-1.25;
+    a.mechanism.data.limit[0].valid=a.mechanism.data.limit[1].valid=1u;
+    a.mechanism.data.limit[0].raw=a.mechanism.data.limit[0].stable=1u;
+    for(page=0u;page<=UI_RACE;++page) for(more=0u;more<2u;++more) {
+        char name[64]; a.ui.page=(uint8_t)page; a.ui.more=(uint8_t)more; a.ui.redraw=1;
+        finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+        snprintf(name,sizeof(name),"ui_%s%s.pgm",names[page],more ? "_more" : ""); save_image(name);
+        if(page==UI_CHASSIS && !more) CHECK(contains(&a.ui,"123.45") && contains(&a.ui,"-67.89"));
+        if(page==UI_MECHANISM && !more) CHECK(contains(&a.ui,"45.25") && contains(&a.ui,"-1.25"));
+        /* White button interiors and black margins are rotated in framebuffer. */
+        CHECK(pixels[271-232][479-8]==255u && pixels[0][0]==0u);
+    }
+    a.ui.page=UI_HOME; a.ui.more=0; a.ui.redraw=1;
+    a.mechanism.owned=1; a.mechanism.data.homing=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); CHECK(contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
+    a.mechanism.data.stop_pending=1; a.ui.redraw=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); CHECK(contains(&a.ui,"\345\201\234\350\275\246\347\241\256\350\256\244\344\270\255"));
+    a.mechanism.data.stop_pending=0; a.mechanism.owned=0; a.chassis.data.state=CHASSIS_FAULT; a.ui.redraw=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); CHECK(contains(&a.ui,"\346\225\205\351\232\234\345\276\205\345\244\204\347\220\206"));
+    a.ui.page=UI_CHASSIS; a.chassis.odometry.valid=0; a.ui.redraw=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); CHECK(!contains(&a.ui,"123.45") && contains(&a.ui,"INVALID"));
+    a.ui.page=UI_MECHANISM; a.mechanism.data.reference[0]=MECH_UNREFERENCED; a.ui.redraw=1;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); CHECK(!contains(&a.ui,"45.25"));
+    a.ui.page=UI_MOTOR; a.ui.more=1; a.ui.redraw=1;
+    a.motor.nodes[0].data.position_counts=INT64_MIN;
+    a.motor.nodes[0].data.rx_count=a.motor.nodes[0].data.timeouts=UINT32_MAX;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+    CHECK(!bad_layout); puts("PASS: rendered all 20 page variants, bounds, extreme counts, phase priority and invalid coordinates");
+}
+static void gyro_ready(QrApp *a)
+{
+    advance(a,2500u); press(a,40,248); press(a,200,120); CHECK(a->ui.page==UI_GYRO);
+#if !GYRO_TEMP_FIXED_BIAS_ENABLED
+    press(a,40,210); advance(a,2400u);
+#endif
+    CHECK(a->gyro.data.angle_valid);
+}
+static void test_actions(void)
+{
+    QrApp a; uint32_t request,session,zeros; unsigned i,before;
     CHECK(BspQrUart_Init()); app_fixture(&a,300000u);
-    review_advance(&a,2500u); review_press(&a,340,14); review_press(&a,20,245);
-    review_advance(&a,2300u); CHECK(a.gyro.data.angle_valid);
-    Chassis_DefaultConfig(&cfg);
-    cfg.mechanical_confirmed=cfg.feedback_confirmed=1u; /* synthetic fixture only */
-    cfg.wheel_diameter_mm=100; cfg.length_mm=200; cfg.width_mm=180; cfg.gear_ratio=1;
-    cfg.flow_x_mm_count=cfg.flow_y_mm_count=0.1f;
-    for(i=0u;i<4u;++i) cfg.motor_sign[i]=1;
-    Chassis_Init(&a.chassis,&a.motor,&cfg,tick); review_advance(&a,20u);
-    CHECK(Chassis_Prepare(&a.chassis,tick)==CHASSIS_ACCEPTED);
-    review_advance(&a,1000u); CHECK(a.chassis.data.state==CHASSIS_READY);
-    review_press(&a,300,245); review_press(&a,300,245); review_press(&a,20,14);
-    CHECK(a.ui.chassis_page); a.ui.redraw=1u;
-    cleared=a.flow.data.clears; zeros=a.gyro.data.zeros; requests=a.gyro.data.cal_requests;
-    lcd_timed=trigger_measure=1u; trigger_have=0u; trigger_max_jitter=0u; lcd_max_step=0u;
-    start=next_command=next_scan=tick;
-    while(tick-start<2200u) {
-        uint32_t elapsed=tick-start;
-        if((int32_t)(tick-next_command)>=0) {
-            CHECK(Chassis_SetBodyVelocity(&a.chassis,50,10,5,tick)==CHASSIS_ACCEPTED); next_command=tick+50u;
-        }
-        if((int32_t)(tick-next_scan)>=0) { inject("156+123+516+231\r",tick,1); next_scan=tick+100u; }
-        if(phase==0u && elapsed>=100u) { review_press(&a,20,245); CHECK(a.chassis.data.rejection==CHASSIS_AXIS_BUSY); ++phase; }
-        if(phase==1u && elapsed>=300u) { review_press(&a,300,245); review_press(&a,20,245); CHECK(!strcmp(a.motor.message,"CHASSIS BUSY")); ++phase; }
-        if(phase==2u && elapsed>=500u) { review_press(&a,20,32); review_press(&a,20,184); CHECK(!strcmp(a.motor.message,"CHASSIS BUSY")); ++phase; }
-        if(phase==3u && elapsed>=700u) { review_press(&a,420,14); review_press(&a,20,245); ++phase; }
-        if(phase==4u && elapsed>=900u) { review_press(&a,340,14); review_press(&a,20,245); review_press(&a,108,245); ++phase; }
-        if(phase==5u && elapsed>=1200u) { review_press(&a,300,245); review_press(&a,300,245); review_press(&a,300,202); review_press(&a,20,14); ++phase; }
-        review_advance(&a,1u);
+    CHECK(Servo_IsEnabled(0u) && Servo_TargetUs(0u)==1700);
+    CHECK(Servo_IsEnabled(1u) && Servo_TargetUs(1u)==1240);
+    app_motor.online=MOTOR_ALL; gyro_ready(&a);
+    zeros=a.gyro.data.zeros; press(&a,200,210); CHECK(a.gyro.data.zeros==zeros+1u);
+    {
+        MotorNode *n=&a.motor.nodes[6];
+        for(i=0u;i<3u;++i) n->poll_due[i]=tick+10000u;
+        n->data.speed_rpm=10; n->data.speed_ms=tick;
+        press(&a,40,210); CHECK(a.gyro.data.calibration==GYRO_CAL_MOTOR);
+        n->data.speed_rpm=0; n->data.speed_ms=tick-10000u;
+        press(&a,40,210); CHECK(a.gyro.data.calibration==GYRO_CAL_UNKNOWN);
+        n->data.speed_ms=tick; n->data.status_ms=tick;
+        MotorBus_Stop(&a.motor,0x40u,tick);
+        press(&a,40,210); CHECK(a.gyro.data.calibration==GYRO_CAL_STOP);
+        for(i=0u;i<3u;++i) n->poll_due[i]=tick;
+        advance(&a,2000u);
     }
-    CHECK(phase==6u && a.chassis.data.state==CHASSIS_VELOCITY && app_motor.groups>=15u);
-    CHECK(a.flow.data.clears==cleared && a.gyro.data.zeros==zeros && a.gyro.data.cal_requests==requests);
-    CHECK(a.gyro.data.angle_valid && a.qr.data.duplicates>=18u && !bad_layout);
-    for(i=0u;i<app_motor.count;++i) CHECK(app_motor.address[i]<=4u);
-    review_press(&a,170,245); review_advance(&a,1000u); groups=app_motor.groups;
-    review_advance(&a,1000u); CHECK(groups==app_motor.groups && !a.chassis.data.sequence_active);
-    CHECK(a.chassis.data.result==CHASSIS_CANCELLED);
-    CHECK(lcd_max_step<=2u && a.gyro.data.max_poll_ms<10u && a.gyro.data.max_interval_ms<=14u);
-    printf("ACTIVE CHASSIS (injected): groups %u UI %u ms gyro poll/dt %lu/%lu ms QR %lu; arbitration/STOP verified\n",
-        app_motor.groups,lcd_max_step,(unsigned long)a.gyro.data.max_poll_ms,
-        (unsigned long)a.gyro.data.max_interval_ms,(unsigned long)a.qr.data.duplicates);
-    lcd_timed=trigger_measure=0u;
+    press(&a,40,248); press(&a,350,120); session=a.qr.data.session;
+    touch_x=479-40; touch_y=271-210; touch_down=1; advance(&a,30u);
+    CHECK(a.qr.data.session==session+1u); touch_down=0; advance(&a,1u);
+    press(&a,40,248); press(&a,40,180); CHECK(a.ui.page==UI_SERVO && a.ui.servo_ready);
+    press(&a,380,175); press(&a,380,125);
+    CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
+    press(&a,20,125); CHECK(Servo_IsEnabled(0u) && Servo_TargetUs(0u)==1700 && !Servo_IsEnabled(1u));
+    press(&a,260,125); CHECK(Servo_TargetUs(0u)==2430);
+    press(&a,20,175); CHECK(Servo_IsEnabled(1u) && Servo_TargetUs(1u)==1240);
+    press(&a,260,175); CHECK(Servo_TargetUs(1u)==1900);
+    press(&a,260,175); CHECK(Servo_TargetUs(1u)==2600 && Servo_TargetUs(0u)==2430);
+    press(&a,140,175); CHECK(Servo_TargetUs(1u)==1900);
+    press(&a,380,175); CHECK(!Servo_IsEnabled(1u) && Servo_IsEnabled(0u));
+    press(&a,380,125); CHECK(!Servo_IsEnabled(0u));
+    press(&a,240,248); request=a.mechanism.data.request_id;
+    press(&a,40,210); CHECK(a.mechanism.data.request_id==request); /* overview has no motion controls */
+    press(&a,420,18); press(&a,40,210); CHECK(a.mechanism.data.rejection==MECH_CONFIG);
+    press(&a,200,210); CHECK(a.mechanism.data.request_id==request);
+    press(&a,140,248); press(&a,420,18); a.chassis.config.mechanical_confirmed=0;
+    request=a.chassis.data.request_id; before=app_motor.count;
+    press(&a,40,210); CHECK(a.chassis.data.rejection==CHASSIS_CONFIG && a.chassis.data.request_id==request);
+    CHECK(app_motor.count==before);
+    a.chassis.config.mechanical_confirmed=1u;
+    advance(&a,1000u); press(&a,40,210); advance(&a,700u);
+    CHECK(a.chassis.data.sequence_active && a.chassis.data.state==CHASSIS_MOVING);
+    request=a.chassis.data.request_id;
+    press(&a,40,210); CHECK(a.chassis.data.request_id==request); /* no restart */
+    press(&a,40,248); press(&a,200,120); zeros=a.gyro.data.zeros;
+    press(&a,200,210); CHECK(a.gyro.data.zeros==zeros && a.chassis.data.rejection==CHASSIS_AXIS_BUSY);
+    /* Every module page exposes exactly the same global STOP hit area. */
+    press(&a,420,248); advance(&a,1800u);
+    CHECK(a.chassis.data.result==CHASSIS_CANCELLED && !a.motor.wheels_pending);
+    for(i=0u;i<7u;++i) CHECK(!a.motor.nodes[i].stop_unconfirmed);
+    CHECK(!bad_layout); puts("PASS: action edges, config gates, chassis START deduplication, gyro arbitration and seven-axis STOP");
+}
+static void test_timing(void)
+{
+    QrApp a; uint32_t start,next_scan,seq,stop_at,latency; unsigned i,before,pumps;
+    CHECK(BspQrUart_Init()); app_fixture(&a,400000u); app_motor.online=MOTOR_ALL; gyro_ready(&a);
+    lcd_timed=trigger_measure=1u; trigger_have=0u; trigger_max_jitter=lcd_max_step=0u;
+    /* Cancel incomplete draws repeatedly, then refresh changing data. */
+    seq=a.gyro.data.sequence; pumps=motor_pumps; start=next_scan=tick;
+    for(i=0u;i<9u;++i) {
+        a.ui.page=(uint8_t)i; a.ui.redraw=1u; advance(&a,25u);
+    }
+    while(tick-start<6000u) {
+        if((int32_t)(tick-next_scan)>=0) { inject("156+123+516+231\r",tick,1); next_scan+=100u; }
+        advance(&a,1u);
+    }
+    CHECK(a.gyro.data.sequence>seq && motor_pumps>pumps && a.gyro.data.angle_valid && a.qr.data.duplicates>50u);
+    for(i=0u;i<7u;++i) CHECK(a.motor.nodes[i].data.online);
+    /* STOP remains live even while a brand-new page is still being drawn. */
+    a.ui.page=UI_HOME; a.ui.redraw=1u; before=app_motor.count; stop_at=tick;
+    press(&a,420,248); advance(&a,40u);
+    CHECK(app_motor.count>before && app_motor.code[before]==EMM_STOP);
+    latency=app_motor.at[before]-stop_at;
+    CHECK(latency<=15u && lcd_max_step<=2u && trigger_max_jitter<=3u && !bad_layout);
+    printf("TIMED UI (injected): max %u ms, STOP %lu ms, gyro poll %lu ms, trigger jitter %lu ms\n",
+        lcd_max_step,(unsigned long)latency,(unsigned long)a.gyro.data.max_poll_ms,(unsigned long)trigger_max_jitter);
+    lcd_overrun=1; a.ui.redraw=1; advance(&a,30u); CHECK(!a.gyro.data.angle_valid && a.gyro.data.angle_gap);
+    lcd_overrun=lcd_timed=trigger_measure=0u;
+}
+#if MECHANISM_TRIAL_RUN
+static void test_trial_boot(void)
+{
+    QrApp a; uint32_t request,start;
+    CHECK(BspQrUart_Init()); app_fixture(&a,500000u); app_motor.online=MOTOR_ALL;
+    CHECK(a.ui.page==UI_HOME); start=tick;
+    /* Observe command start independently of the current length scale,
+       search bound and RPM. Synthetic feedback is not physical calibration. */
+    while (tick-start<4000u && !a.motor.nodes[5].motion) advance(&a,1u);
+    CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_FAST_SEEK);
+    CHECK(a.motor.nodes[5].motion && contains(&a.ui,"TRIAL") && contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
+    request=a.mechanism.data.request_id;
+    press(&a,240,248); press(&a,420,18); press(&a,40,210);
+    CHECK(a.mechanism.data.request_id==request && a.mechanism.data.rejection==MECH_AXIS_BUSY);
+    press(&a,420,248); advance(&a,1500u);
+    CHECK(a.mechanism.data.result==MECH_CANCELLED && !a.mechanism.auto_pending && !a.mechanism.owned);
+    CHECK(!bad_layout); puts("PASS: shipped TRIAL boots to dashboard, auto-homes lift, busy HOME rejected, STOP cancels");
+}
+#endif
+
+static int integration_send(void *ctx,const uint8_t *wire,uint8_t n)
+{ (void)ctx; (void)wire; return n!=0u; }
+static MissionActionResult integration_wait(void *ctx,uint32_t id,QrTaskCode *task,uint32_t now)
+{ (void)ctx; (void)id; (void)task; (void)now; return MISSION_WAIT; }
+static void test_integration(void)
+{
+    QrApp a; uint32_t id; unsigned mode;
+    CHECK(BspQrUart_Init()); app_fixture(&a,600000u);
+    CHECK(a.ui.vision==&a.vision && a.ui.mission==&a.mission);
+    CHECK(a.ui.mechanism==&a.mechanism && a.chassis.external_busy==&a.mechanism.owned);
+    a.vision.transport.send=integration_send;
+    press(&a,200,180); CHECK(a.ui.page==UI_VISION);
+    mode=a.ui.vision_mode; press(&a,40,78); CHECK(a.ui.vision_mode==(mode+1u)%5u);
+    press(&a,40,102); CHECK(a.ui.vision_color==2u);
+    press(&a,200,102); CHECK(a.ui.vision_zone==2u);
+    press(&a,360,102); CHECK(a.ui.vision_position==2u);
+    id=a.vision.request_id; press(&a,40,210); CHECK(a.vision.request_id!=id);
+    press(&a,200,210); CHECK(a.vision.state==VISION_STOPPING);
+    press(&a,40,248); press(&a,420,18); press(&a,40,210);
+    CHECK(a.ui.page==UI_RACE && a.mission.state==MISSION_IDLE);
+    press(&a,40,210); CHECK(a.mission.state==MISSION_IDLE && a.mission.blocked);
+    /* While a mission runs, diagnostic pages cannot steal its motor intent. */
+    a.mission.port.poll=integration_wait; a.mission.state=MISSION_RUNNING; a.mission.active=1u; a.mission.action_ms=tick;
+    a.ui.page=UI_MECHANISM; a.ui.more=1u; id=a.mechanism.data.request_id;
+    press(&a,40,210); CHECK(a.mechanism.data.request_id==id && Mission_IsRunning(&a.mission));
+    press(&a,420,248); CHECK(a.mission.state==MISSION_ABORTED);
+    CHECK(a.vision.state==VISION_STOPPING && !a.mechanism.auto_pending);
+    CHECK(!bad_layout);
+    puts("PASS: integrated vision controls, zone-2 gate, mission ownership and global STOP");
 }
 int main(int argc,char **argv)
 {
-    if(argc>1 && !strcmp(argv[1],"chassis-active")) { test_chassis_active(); return 0; }
-    if(argc>1 && !strcmp(argv[1],"review-parallel")) { test_review_parallel(); return 0; }
-    if(argc>1 && !strcmp(argv[1],"review-ui")) { test_review_ui(); return 0; }
-    if(argc>1 && !strcmp(argv[1],"review-gate")) { test_review_gate(); return 0; }
-    if(argc>1 && !strcmp(argv[1],"chassis-screen")) { test_chassis_screen(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"integration")) { test_integration(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"render")) { render_pages(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"timing")) { test_timing(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"actions")) { test_actions(); return 0; }
+#if MECHANISM_TRIAL_RUN
+    if(argc>1 && !strcmp(argv[1],"trial-boot")) { test_trial_boot(); return 0; }
+#endif
     if(argc>1) {
         QrService s;
         if(!strcmp(argv[1],"init")) init_fail=1;
-        if(!strcmp(argv[1],"dma")) dma_init_fail=1;
-        if(!strcmp(argv[1],"receive")) receive_fail=1;
-        if(!strcmp(argv[1],"start")) dma_start_fail=1;
+        else if(!strcmp(argv[1],"dma")) dma_init_fail=1;
+        else if(!strcmp(argv[1],"receive")) receive_fail=1;
+        else if(!strcmp(argv[1],"start")) dma_start_fail=1;
+        else { fprintf(stderr,"Unknown test: %s\n",argv[1]); return 1; }
         CHECK(!BspQrUart_Init()); QrService_Init(&s,0u,0u); BspQrUart_Pump(&s,0u);
-        CHECK(!s.data.valid && !s.data.uart_ready && !strcmp(QrService_StateName(&s),"UART ERROR"));
-        printf("PASS: QR startup failure (%s)\n",argv[1]); return 0;
+        CHECK(!s.data.valid && !s.data.uart_ready); return 0;
     }
-    test_validation(); test_stream_sessions(); test_bsp(); test_app_ui(); test_seven_ui(); test_flow_ui(); test_gyro_ui();
-#if MOTOR_TEST_CONFIGURED
-    test_configured_actions();
-#endif
-#if !MOTOR_TEST_CONFIGURED && MOTOR_BENCH_JOG_ENABLED
-    test_bench_jog();
-#endif
-    printf("PASS: %u QR checks (parser, sessions, real BSP/callbacks, app, UI)\n",checks);
-    return 0;
+    test_validation(); test_stream_sessions(); test_bsp(); test_orientation(); test_dashboard(); render_pages();
+    printf("PASS: %u QR/dashboard checks\n",checks); return 0;
 }

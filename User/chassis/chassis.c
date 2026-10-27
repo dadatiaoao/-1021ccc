@@ -60,12 +60,10 @@ static void begin_stop(Chassis *c, ChassisResult result, ChassisReason why, uint
     if (result==CHASSIS_FAILED && !c->data.fault.valid) {
         ChassisFault *fault=&c->data.fault;
         fault->valid=1u; fault->at_ms=now;
-        if (why==CHASSIS_FLOW_INVALID) {
+        if (why==CHASSIS_ODOMETRY_INVALID) {
             const ChassisOdometry *o=&c->odometry;
-            fault->issue=o->last_issue; fault->flow_error=o->break_flow_error;
-            fault->flow_age_ms=o->break_flow_age_ms; fault->paired_age_ms=o->break_paired_age_ms;
-            fault->quality=o->break_quality; fault->rejected=o->break_rejected;
-            fault->gaps=o->break_gaps; fault->segments=o->break_segments; fault->clears=o->break_clears;
+            fault->issue=o->last_issue; fault->sample_age_ms=o->break_age_ms;
+            fault->wheel=o->break_wheel;
         }
     }
     c->data.sequence_active=(uint8_t)(result==CHASSIS_SUCCESS && c->data.sequence_active);
@@ -90,6 +88,7 @@ static void request_id(Chassis *c)
 }
 ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)
 {
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (!stopped(c)) return reject(c,CHASSIS_NOT_READY,CHASSIS_STOP_UNCONFIRMED);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,0u);
@@ -102,6 +101,7 @@ ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)
 static ChassisRequestResult motion_ready(Chassis *c, uint32_t now, uint8_t closed)
 {
     ChassisReason why;
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (c->data.sequence_active || (c->data.state!=CHASSIS_READY &&
         c->data.state!=CHASSIS_VELOCITY)) return reject(c,
             Chassis_OwnsWheels(c) ? CHASSIS_BUSY : CHASSIS_NOT_READY,CHASSIS_AXIS_BUSY);
@@ -149,8 +149,8 @@ static ChassisRequestResult begin_action(Chassis *c, float x, float y, float ang
 {
     double seconds, distance=sqrt((double)x*x+(double)y*y);
     if (!Chassis_GyroValid(&c->gyro,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
-    if (kind==1u && (!c->odometry.valid || now-c->odometry.flow_guard.sample_ms>100u))
-        return reject(c,CHASSIS_NOT_READY,CHASSIS_FLOW_INVALID);
+    if (kind==1u && (!c->odometry.valid || now-c->odometry.sample_ms>MOTOR_BUS_FRESH_MS))
+        return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     request_id(c); c->finite=kind; c->have_origin=1u; c->action_limit=limit; c->action_gyro=c->gyro;
     c->origin_angle=c->gyro.angle_deg; c->origin_x=c->odometry.x; c->origin_y=c->odometry.y;
     c->odometry_generation=c->odometry.generation;
@@ -160,7 +160,7 @@ static ChassisRequestResult begin_action(Chassis *c, float x, float y, float ang
     if (seconds>60.0) seconds=60.0;
     c->deadline=now+(uint32_t)(seconds*1000.0);
     c->control_ms=now; c->publish_ms=now-c->config.publish_ms; c->stable=0u;
-    c->stable_flow_seq=c->odometry.flow_guard.sequence; c->stable_gyro_seq=c->gyro.sequence;
+    c->stable_odometry_seq=c->odometry.sequence; c->stable_gyro_seq=c->gyro.sequence;
     memset(&c->data.output,0,sizeof(c->data.output)); pose(c);
     return CHASSIS_ACCEPTED;
 }
@@ -186,12 +186,13 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle, float limit
 ChassisRequestResult Chassis_StartAcceptance(Chassis *c, uint32_t now)
 {
     ChassisRequestResult r;
+    if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,1u);
     if (c->data.config_issues) return reject(c,CHASSIS_INVALID,CHASSIS_CONFIG);
     if (!Chassis_GyroValid(&c->gyro,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
-    if (!c->odometry.valid || now-c->odometry.flow_guard.sample_ms>100u)
-        return reject(c,CHASSIS_NOT_READY,CHASSIS_FLOW_INVALID);
+    if (!c->odometry.valid || now-c->odometry.sample_ms>MOTOR_BUS_FRESH_MS)
+        return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     r=Chassis_Prepare(c,now);
     if (r==CHASSIS_ACCEPTED) {
         c->data.sequence_active=1u; c->data.stage=0u;
@@ -243,7 +244,7 @@ static void stop_process(Chassis *c, uint32_t now)
     if (c->stop_result==CHASSIS_SUCCESS) {
         if (!c->verifying) { c->verify_ms=now; c->verifying=1u; return; }
         if (!due(c->gyro.sample_ms,c->verify_ms+1u) ||
-            (c->finite==1u && !due(c->odometry.flow_guard.sample_ms,c->verify_ms+1u))) return;
+            (c->finite==1u && !due(c->odometry.sample_ms,c->verify_ms+1u))) return;
         if (!in_window(c)) { c->stop_result=CHASSIS_FAILED; c->data.reason=CHASSIS_FINAL_ERROR; }
     }
     c->data.stop_pending=0u; c->data.result=c->stop_result;
@@ -296,13 +297,13 @@ static void sequence_process(Chassis *c, uint32_t now)
         begin_action(c,0.0f,0.0f,stage==7u ? 90.0f : -90.0f,c->config.max_rate_deg_s,2u,now);
     if (r!=CHASSIS_ACCEPTED) begin_stop(c,CHASSIS_FAILED,c->data.rejection,now);
 }
-void Chassis_Process(Chassis *c, const FlowSnapshot *f, const GyroSnapshot *g, uint32_t now)
+void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
 {
     unsigned i; ChassisReason why; uint32_t lease;
-    c->flow=*f; c->gyro=*g;
-    Chassis_OdometryProcess(&c->odometry,&c->config,f,g,now);
+    c->gyro=*g;
+    Chassis_OdometryProcess(&c->odometry,&c->config,c->bus,g,now);
     c->data.gyro_valid=(uint8_t)Chassis_GyroValid(g,now);
-    c->data.flow_valid=c->odometry.valid;
+    c->data.odometry_valid=c->odometry.valid;
     if (c->have_origin) pose(c);
     c->data.pose_valid=(uint8_t)(c->have_origin && c->data.gyro_valid && c->odometry.valid &&
         c->odometry.generation==c->odometry_generation && Chassis_GyroContinuous(&c->action_gyro,g));
@@ -327,13 +328,13 @@ void Chassis_Process(Chassis *c, const FlowSnapshot *f, const GyroSnapshot *g, u
         if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
         else if (c->data.stage<6u && (!c->odometry.valid || c->odometry.generation!=c->odometry_generation))
-            begin_stop(c,CHASSIS_FAILED,CHASSIS_FLOW_INVALID,now);
+            begin_stop(c,CHASSIS_FAILED,CHASSIS_ODOMETRY_INVALID,now);
     }
     if (c->finite) {
         if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
         else if (c->finite==1u && (!c->odometry.valid || c->odometry.generation!=c->odometry_generation))
-            begin_stop(c,CHASSIS_FAILED,CHASSIS_FLOW_INVALID,now);
+            begin_stop(c,CHASSIS_FAILED,CHASSIS_ODOMETRY_INVALID,now);
     }
     if (c->data.state==CHASSIS_STOPPING) { stop_process(c,now); return; }
     if (c->data.state==CHASSIS_VELOCITY && due(now,c->input_deadline)) {
@@ -351,8 +352,8 @@ void Chassis_Process(Chassis *c, const FlowSnapshot *f, const GyroSnapshot *g, u
         if (due(now,c->deadline)) { begin_stop(c,CHASSIS_FAILED,CHASSIS_ACTION_TIMEOUT,now); return; }
         if (!in_window(c)) c->stable=0u;
         else if (g->sequence!=c->stable_gyro_seq &&
-            (c->finite!=1u || c->odometry.flow_guard.sequence!=c->stable_flow_seq)) {
-            c->stable_gyro_seq=g->sequence; c->stable_flow_seq=c->odometry.flow_guard.sequence;
+            (c->finite!=1u || c->odometry.sequence!=c->stable_odometry_seq)) {
+            c->stable_gyro_seq=g->sequence; c->stable_odometry_seq=c->odometry.sequence;
             if (!c->stable) { c->stable=1u; c->stable_since=now; }
             else if (now-c->stable_since>=c->config.stable_ms) {
                 begin_stop(c,CHASSIS_SUCCESS,CHASSIS_OK,now); return;
@@ -389,7 +390,7 @@ const char *Chassis_StateName(ChassisState s)
 const char *Chassis_ReasonName(ChassisReason r)
 {
     static const char * const names[]={"OK","CONFIG REQUIRED","WHEEL FEEDBACK","WHEEL FAULT","STOP UNCONF",
-        "CHASSIS BUSY","ENABLE FAILED","PREPARE TIMEOUT","INPUT EXPIRED","GYRO INVALID","FLOW INVALID",
+        "CHASSIS BUSY","ENABLE FAILED","PREPARE TIMEOUT","INPUT EXPIRED","GYRO INVALID","ODOM INVALID",
         "SENSOR CHANGED","ACTION TIMEOUT","STOP TIMEOUT","FINAL ERROR","INVALID REQUEST","BUS REJECTED"};
     return (unsigned)r<17u ? names[r] : "?";
 }

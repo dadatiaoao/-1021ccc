@@ -114,6 +114,30 @@ int Emm_Wheels(EmmCommand *out, const int32_t rpm[4], uint8_t acceleration)
 EmmCommand Emm_SyncTrigger(void)
 { EmmCommand c = command(0u, EMM_SYNC, 4u); c.bytes[2] = 0x66u; return c; }
 
+EmmCommand Emm_HomeConfig(uint8_t address, uint8_t direction, uint16_t rpm,
+    uint32_t timeout_ms, uint16_t stall_rpm, uint16_t stall_ma, uint16_t stall_ms)
+{
+    EmmCommand c=command(address,EMM_HOME_CONFIG,20u);
+    c.bytes[2]=0xAEu; c.bytes[4]=2u; c.bytes[5]=direction;
+    c.bytes[6]=(uint8_t)(rpm>>8); c.bytes[7]=(uint8_t)rpm;
+    c.bytes[8]=(uint8_t)(timeout_ms>>24); c.bytes[9]=(uint8_t)(timeout_ms>>16);
+    c.bytes[10]=(uint8_t)(timeout_ms>>8); c.bytes[11]=(uint8_t)timeout_ms;
+    c.bytes[12]=(uint8_t)(stall_rpm>>8); c.bytes[13]=(uint8_t)stall_rpm;
+    c.bytes[14]=(uint8_t)(stall_ma>>8); c.bytes[15]=(uint8_t)stall_ma;
+    c.bytes[16]=(uint8_t)(stall_ms>>8); c.bytes[17]=(uint8_t)stall_ms;
+    return c;
+}
+EmmCommand Emm_HomeBackoff(uint8_t address, uint16_t tenths_degree)
+{
+    EmmCommand c=command(address,EMM_HOME_BACKOFF,7u);
+    c.bytes[2]=0xACu; c.bytes[4]=(uint8_t)(tenths_degree>>8); c.bytes[5]=(uint8_t)tenths_degree;
+    return c;
+}
+EmmCommand Emm_Home(uint8_t address)
+{ EmmCommand c=command(address,EMM_HOME,5u); c.bytes[2]=2u; return c; }
+EmmCommand Emm_HomeAbort(uint8_t address)
+{ EmmCommand c=command(address,EMM_HOME_ABORT,4u); c.bytes[2]=0x48u; return c; }
+
 void EmmParser_Init(EmmParser *p, uint8_t address)
 {
     memset(p, 0, sizeof(*p)); p->address = address;
@@ -125,6 +149,8 @@ static uint8_t frame_length(uint8_t code)
     case EMM_VERSION: return 7u;
     case EMM_POSITION: return 8u;
     case EMM_SPEED: return 6u;
+    case EMM_HOME_STATUS: return 5u;
+    case EMM_HOME: case EMM_HOME_ABORT: case EMM_HOME_CONFIG: case EMM_HOME_BACKOFF:
     case EMM_STATUS: case EMM_ENABLE: case EMM_VELOCITY:
     case EMM_MOVE: case EMM_STOP: case EMM_SYNC: return 4u;
     default: return 0u;
@@ -155,7 +181,8 @@ static int decode(const uint8_t *b, EmmFrame *f)
             magnitude = ((uint32_t)b[3] << 8) | b[4];
             f->speed = b[2] ? -(int32_t)magnitude : (int32_t)magnitude;
         }
-    } else if (b[1] == EMM_STATUS) f->flags = b[2];
+    } else if (b[1] == EMM_HOME_STATUS) { f->home_flags=b[2]; f->flags=b[3]; }
+    else if (b[1] == EMM_STATUS) f->flags = b[2];
     else if (b[1] == EMM_VERSION) {
         f->firmware = (uint16_t)(((uint16_t)b[2] << 8) | b[3]);
         f->hardware = (uint16_t)(((uint16_t)b[4] << 8) | b[5]);

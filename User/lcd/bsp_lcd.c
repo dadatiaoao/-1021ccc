@@ -17,6 +17,7 @@
   
 /* Includes ------------------------------------------------------------------*/
 #include "./lcd/bsp_lcd.h"
+#include "lcd_orientation.h"
 #include "./fonts//font24.c"
 #include "./fonts//font20.c"
 #include "./fonts//font16.c"
@@ -124,7 +125,9 @@ LCD_TypeDef cur_lcd = INCH_4_3;
 static void DrawChar(uint16_t Xpos, uint16_t Ypos, const uint8_t *c);
 static void FillTriangle(uint16_t x1, uint16_t x2, uint16_t x3, uint16_t y1, uint16_t y2, uint16_t y3);
 static void LL_FillBuffer(uint32_t LayerIndex, void *pDst, uint32_t xSize, uint32_t ySize, uint32_t OffLine, uint32_t ColorIndex);
+#if !LCD_MOUNT_ROTATE_180
 static void LL_ConvertLineToARGB8888(void * pSrc, void *pDst, uint32_t xSize, uint32_t ColorMode);
+#endif
  /**
   * @brief  初始化控制LCD的IO
   * @param  无
@@ -567,11 +570,13 @@ sFONT *LCD_GetFont(void)
 uint32_t LCD_ReadPixel(uint16_t Xpos, uint16_t Ypos)
 {
   uint32_t ret = 0;
+  uint16_t w=1u,h=1u;
+  if (!Lcd_OrientRect(&Xpos,&Ypos,&w,&h,LCD_GetXSize(),LCD_GetYSize())) return 0;
   
   if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB8888)
   {
     /* 从SDRAM显存中读取颜色数据 */
-    ret = *(__IO uint32_t*) (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress + (2*(Ypos*LCD_GetXSize() + Xpos)));
+    ret = *(__IO uint32_t*) (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress + (4*(Ypos*LCD_GetXSize() + Xpos)));
   }
   else if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_RGB888)
   {
@@ -728,28 +733,7 @@ void LCD_DisplayStringLine(uint16_t Line, uint8_t *ptr)
   */
 void LCD_DrawHLine(uint16_t Xpos, uint16_t Ypos, uint16_t Length)
 {
-  uint32_t  Xaddress = 0;
-
-  if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB8888)
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 4*(LCD_GetXSize()*Ypos + Xpos);
-  }
-  else if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_RGB888)
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 3*(LCD_GetXSize()*Ypos + Xpos);
-  }
-  else if((Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_RGB565) || \
-          (Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB4444) || \
-          (Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_AL88))  
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 2*(LCD_GetXSize()*Ypos + Xpos);   
-  }
-  else
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 2*(LCD_GetXSize()*Ypos + Xpos);   
-  }	
-  /* 填充数据 */
-  LL_FillBuffer(ActiveLayer, (uint32_t *)Xaddress, Length, 1, 0, DrawProp[ActiveLayer].TextColor);
+  LCD_FillRect(Xpos, Ypos, Length, 1u);
 }
 
 /**
@@ -761,29 +745,7 @@ void LCD_DrawHLine(uint16_t Xpos, uint16_t Ypos, uint16_t Length)
   */
 void LCD_DrawVLine(uint16_t Xpos, uint16_t Ypos, uint16_t Length)
 {
-  uint32_t  Xaddress = 0;
-  
-  if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB8888)
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 4*(LCD_GetXSize()*Ypos + Xpos);
-  }
-  else if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_RGB888)
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 3*(LCD_GetXSize()*Ypos + Xpos);
-  }
-  else if((Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_RGB565) || \
-          (Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB4444) || \
-          (Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_AL88))  
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 2*(LCD_GetXSize()*Ypos + Xpos);   
-  }
-  else
-  {
-    Xaddress = (Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress) + 2*(LCD_GetXSize()*Ypos + Xpos);   
-  }	
-  
-  /* 填充数据 */
-  LL_FillBuffer(ActiveLayer, (uint32_t *)Xaddress, 1, Length, (LCD_GetXSize() - 1), DrawProp[ActiveLayer].TextColor);
+  LCD_FillRect(Xpos, Ypos, 1u, Length);
 }
 
 /**
@@ -997,6 +959,8 @@ void LCD_DrawEllipse(int Xpos, int Ypos, int XRadius, int YRadius)
   */
 void LCD_DrawPixel(uint16_t Xpos, uint16_t Ypos, uint32_t RGB_Code)
 {
+  uint16_t w=1u,h=1u;
+  if (!Lcd_OrientRect(&Xpos,&Ypos,&w,&h,LCD_GetXSize(),LCD_GetYSize())) return;
 
   if(Ltdc_Handler.LayerCfg[ActiveLayer].PixelFormat == LTDC_PIXEL_FORMAT_ARGB8888)
   {
@@ -1031,8 +995,10 @@ void LCD_DrawPixel(uint16_t Xpos, uint16_t Ypos, uint32_t RGB_Code)
 void LCD_DrawBitmap(uint32_t Xpos, uint32_t Ypos, uint8_t *pbmp)
 {
   uint32_t index = 0, width = 0, height = 0, bit_pixel = 0;
+#if !LCD_MOUNT_ROTATE_180
   uint32_t address;
   uint32_t input_color_mode = 0;
+#endif
   
   /* 获取位图数据的基地址 */
   index = *(__IO uint16_t *) (pbmp + 10);
@@ -1050,6 +1016,27 @@ void LCD_DrawBitmap(uint32_t Xpos, uint32_t Ypos, uint8_t *pbmp)
   bit_pixel = *(uint16_t *) (pbmp + 28);   
   
   /* 设定地址 */
+#if LCD_MOUNT_ROTATE_180
+  {
+    uint32_t row, col, stride=((width*bit_pixel+31u)/32u)*4u;
+    const uint8_t *base=pbmp+index;
+    if (bit_pixel!=16u && bit_pixel!=24u && bit_pixel!=32u) return;
+    for (row=0u;row<height && Ypos+row<LCD_GetYSize();++row) {
+      const uint8_t *src=base+(height-1u-row)*stride;
+      for (col=0u;col<width && Xpos+col<LCD_GetXSize();++col) {
+        const uint8_t *p=src+col*(bit_pixel/8u);
+        uint32_t color;
+        if (bit_pixel==16u) {
+          uint32_t v=(uint32_t)p[0]|((uint32_t)p[1]<<8);
+          color=0xFF000000u|(((v>>11)&31u)*255u/31u<<16)|
+            (((v>>5)&63u)*255u/63u<<8)|((v&31u)*255u/31u);
+        } else color=((uint32_t)p[0])|((uint32_t)p[1]<<8)|((uint32_t)p[2]<<16)|
+            (bit_pixel==32u ? (uint32_t)p[3]<<24 : 0xFF000000u);
+        LCD_DrawPixel((uint16_t)(Xpos+col),(uint16_t)(Ypos+row),color);
+      }
+    }
+  }
+#else
   address = Ltdc_Handler.LayerCfg[ActiveLayer].FBStartAdress + (((LCD_GetXSize()*Ypos) + Xpos)*(4));
   
   /*判断层输入像素格式 */    
@@ -1078,7 +1065,8 @@ void LCD_DrawBitmap(uint32_t Xpos, uint32_t Ypos, uint8_t *pbmp)
     /* 递增源和目标缓冲区 */
     address+=  (LCD_GetXSize()*4);
     pbmp -= width*(bit_pixel/8);
-  } 
+  }
+#endif
 }
 
 /**
@@ -1096,6 +1084,7 @@ void LCD_DrawBitmap(uint32_t Xpos, uint32_t Ypos, uint8_t *pbmp)
 void LCD_FillRect(uint16_t Xpos, uint16_t Ypos, uint16_t Width, uint16_t Height)
 {
   uint32_t  x_address = 0;
+  if (!Lcd_OrientRect(&Xpos,&Ypos,&Width,&Height,LCD_GetXSize(),LCD_GetYSize())) return;
   
   /* 设置文字颜色 */
   LCD_SetTextColor(DrawProp[ActiveLayer].TextColor);
@@ -1669,6 +1658,7 @@ static void LL_FillBuffer(uint32_t LayerIndex, void *pDst, uint32_t xSize, uint3
   * @param  ColorMode: 输入颜色模式   
   * @retval 无
   */
+#if !LCD_MOUNT_ROTATE_180
 static void LL_ConvertLineToARGB8888(void *pSrc, void *pDst, uint32_t xSize, uint32_t ColorMode)
 {    
   /* 配置DMA2D模式,颜色模式和输出偏移 */
@@ -1697,6 +1687,7 @@ static void LL_ConvertLineToARGB8888(void *pSrc, void *pDst, uint32_t xSize, uin
     }
   } 
 }
+#endif
 
 #if GBKCODE_FLASH
 
