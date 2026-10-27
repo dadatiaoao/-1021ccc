@@ -46,7 +46,7 @@ typedef struct {
     int64_t target_counts, previous_target;
     int32_t target_rpm;
     uint8_t target_known, previous_known, motion, failures, stop_sent, requested_enable;
-    uint8_t stop_unconfirmed, stop_attempts;
+    uint8_t stop_unconfirmed, stop_attempts, homing, home_flags;
     uint16_t firmware, hardware;
     uint8_t version_valid, last_notice, failure_code, failure_result;
 } MotorNode;
@@ -91,6 +91,8 @@ void MotorBus_TransportError(MotorBus *b, MotorError error, uint32_t now);
 void MotorBus_SetManual(MotorBus *b, uint8_t manual, uint32_t now);
 int MotorBus_Enable(MotorBus *b, uint8_t address, uint8_t enabled, uint32_t now);
 int MotorBus_Submit(MotorBus *b, const MotorAction *action, uint32_t now);
+/* Only native homing setup/start commands; uses the same queue and STOP path. */
+int MotorBus_HomeCommand(MotorBus *b, const EmmCommand *command, uint32_t timeout_ms, uint32_t now);
 int MotorBus_Wheels(MotorBus *b, const int32_t rpm[4], uint8_t acceleration,
                     uint32_t lease_ms, uint32_t now);
 int MotorBus_Sync(MotorBus *b, const MotorAction *actions, uint8_t count, uint32_t now);

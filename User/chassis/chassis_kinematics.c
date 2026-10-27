@@ -15,9 +15,6 @@ void Chassis_DefaultConfig(ChassisConfig *c)
     c->wheel_diameter_mm=CHASSIS_WHEEL_DIAMETER_MM;
     c->length_mm=CHASSIS_LENGTH_MM; c->width_mm=CHASSIS_WIDTH_MM;
     c->gear_ratio=CHASSIS_GEAR_RATIO; memcpy(c->motor_sign, signs, sizeof(signs));
-    c->flow_x_mm_count=CHASSIS_FLOW_X_MM_PER_COUNT; c->flow_y_mm_count=CHASSIS_FLOW_Y_MM_PER_COUNT;
-    c->flow_mount_deg=CHASSIS_FLOW_MOUNT_DEG;
-    c->flow_offset_x_mm=CHASSIS_FLOW_OFFSET_X_MM; c->flow_offset_y_mm=CHASSIS_FLOW_OFFSET_Y_MM;
     c->max_rpm=60.0f; c->max_speed_mm_s=100.0f; c->max_rate_deg_s=30.0f;
     c->acceleration_mm_s2=200.0f; c->acceleration_deg_s2=60.0f;
     c->position_kp=1.5f; c->heading_kp=2.0f; c->rate_damping=0.2f;
@@ -28,7 +25,7 @@ void Chassis_DefaultConfig(ChassisConfig *c)
 uint32_t Chassis_ConfigIssues(const ChassisConfig *c, uint8_t closed)
 {
     uint32_t bad=0u; unsigned i;
-    if (!c) return 63u;
+    if (!c) return 31u;
     if (c->mechanical_confirmed!=1u) bad|=CHASSIS_CFG_MECHANICAL;
     /* Bounds avoid overflowing otherwise finite geometry during calculation. */
     if (!positive(c->wheel_diameter_mm) || c->wheel_diameter_mm>10000.0f ||
@@ -49,13 +46,7 @@ uint32_t Chassis_ConfigIssues(const ChassisConfig *c, uint8_t closed)
         c->publish_ms<100u || c->publish_ms>200u || c->input_lease_ms<200u ||
         c->input_lease_ms>300u || c->stable_ms<200u || c->stable_ms>5000u ||
         c->between_ms<1000u || c->between_ms>10000u) bad|=CHASSIS_CFG_LIMITS;
-    if (closed) {
-        if (c->feedback_confirmed!=1u) bad|=CHASSIS_CFG_FEEDBACK;
-        if (!positive(c->flow_x_mm_count) || !positive(c->flow_y_mm_count) ||
-            !Chassis_Finite(c->flow_mount_deg) || fabs(c->flow_mount_deg)>360.0 ||
-            !Chassis_Finite(c->flow_offset_x_mm) || fabs(c->flow_offset_x_mm)>10000.0 ||
-            !Chassis_Finite(c->flow_offset_y_mm) || fabs(c->flow_offset_y_mm)>10000.0) bad|=CHASSIS_CFG_FLOW;
-    }
+    if (closed && c->feedback_confirmed!=1u) bad|=CHASSIS_CFG_FEEDBACK;
     return bad;
 }
 int Chassis_Solve(const ChassisConfig *c, ChassisVelocity v, ChassisWheels *o)

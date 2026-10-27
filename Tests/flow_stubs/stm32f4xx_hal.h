@@ -6,7 +6,6 @@ extern SPI_TypeDef fake_spi2;
 extern GPIO_TypeDef fake_gpioe;
 #define SPI2 (&fake_spi2)
 #define GPIOE (&fake_gpioe)
-#define GPIO_PIN_3 (1u<<3)
 #define GPIO_PIN_13 (1u<<13)
 #define GPIO_SPEED_FREQ_HIGH 2u
 #define GPIO_AF5_SPI2 5u

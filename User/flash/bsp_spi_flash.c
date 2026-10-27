@@ -16,7 +16,9 @@
   */
   
 #include "./flash/bsp_spi_flash.h"
+#if !defined(SERVO_DUAL_RUNTIME) || !SERVO_DUAL_RUNTIME
 #include "./flow/bsp_flow_spi.h"
+#endif
 
 SPI_HandleTypeDef SpiHandle;
 
@@ -39,7 +41,9 @@ static uint16_t SPI_TIMEOUT_UserCallback(uint8_t errorCode);
 void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
 {
   GPIO_InitTypeDef  GPIO_InitStruct;
+#if !defined(SERVO_DUAL_RUNTIME) || !SERVO_DUAL_RUNTIME
   if (hspi->Instance == SPI2) { BspFlowSpi_MspInit(hspi); return; }
+#endif
   if (hspi->Instance != SPI5) return;
   
   /*##-1- Enable peripherals and GPIO Clocks #################################*/
