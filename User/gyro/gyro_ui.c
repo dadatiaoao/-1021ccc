@@ -21,6 +21,22 @@ static const char *bus_name(GyroBusError e)
         "SCL_LOW","SDA_LOW","BOTH_LOW","HW_BUSY"};
     return (unsigned)e<sizeof(names)/sizeof(names[0]) ? names[e] : "UNKNOWN";
 }
+/* Compact records fit the existing eight-row MORE page. No new touch target. */
+static void failure_line(char t[43],const char *label,const GyroBusFailure *f)
+{
+    char stage[16];
+    if (!f->valid) { snprintf(t,43,"%s:NONE",label); return; }
+    if (f->stage==GYRO_TRACE_BUS_INIT) {
+        snprintf(t,43,"%s:BUS_INIT -- %s",label,bus_name(f->bus)); return;
+    }
+    if (f->stage==GYRO_TRACE_INIT)
+        snprintf(stage,sizeof(stage),"INIT%u.%u",(unsigned)f->phase,(unsigned)f->index);
+    else if (f->stage==GYRO_TRACE_CHECK)
+        snprintf(stage,sizeof(stage),"CHECK%u",(unsigned)f->index);
+    else strcpy(stage,"SAMPLE");
+    snprintf(t,43,"%s:%s %c:%02X %s",label,stage,(char)f->op,
+             (unsigned)f->reg,bus_name(f->bus));
+}
 /*
  * 输出概览或诊断行；角度无效时显示 --/GAP，不能把保留的旧角度显示成当前可用结果。
  */
@@ -34,9 +50,9 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
         case 1u: snprintf(t,43,"%s ID:%02X A:%02X",Gyro_StateName(d),d->who,GYRO_ADDRESS_7BIT); break;
         case 2u: snprintf(t,43,"SEQ:%lu DT:%lums",(unsigned long)d->sequence,(unsigned long)d->interval_ms); break;
         case 3u: snprintf(t,43,"MAXdt:%lu POLL:%lums",(unsigned long)d->max_interval_ms,(unsigned long)d->max_poll_ms); break;
-        case 4u: snprintf(t,43,"PROC max:%luus",(unsigned long)d->max_process_us); break;
+        case 4u: failure_line(t,"FIRST",&d->first_bus_failure); break;
         case 5u: snprintf(t,43,"MISS:%lu GAP:%lu",(unsigned long)d->missed,(unsigned long)d->gaps); break;
-        case 6u: snprintf(t,43,"SAT:%lu BAD:%lu",(unsigned long)d->saturations,(unsigned long)d->invalid); break;
+        case 6u: failure_line(t,"RECENT",&d->last_bus_failure); break;
         case 7u: snprintf(t,43,"LAST:%s LBUS:%s",Gyro_ErrorName(d->last_fault),bus_name(d->last_bus_error)); break;
         case 8u: snprintf(t,43,"REINIT:%lu E:%lu",(unsigned long)d->restarts,(unsigned long)d->errors); break;
         default: break;

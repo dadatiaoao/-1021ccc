@@ -65,9 +65,9 @@ static const uint8_t settings[][2] = {
     {REG_INT_SOURCE0,0x08u}, {REG_PWR_MGMT0,0x2Cu} /* gyro LN, accel/temp off */
 };
 static int rd(Icm42688 *p,const GyroIo *io,uint8_t reg,uint8_t *v,size_t n)
-{ p->bus_error=io->read(io->ctx,reg,v,n); return p->bus_error==GYRO_BUS_OK; }
+{ p->trace_op='R'; p->trace_reg=reg; p->bus_error=io->read(io->ctx,reg,v,n); return p->bus_error==GYRO_BUS_OK; }
 static int wr(Icm42688 *p,const GyroIo *io,uint8_t reg,uint8_t v)
-{ p->bus_error=io->write(io->ctx,reg,v); return p->bus_error==GYRO_BUS_OK; }
+{ p->trace_op='W'; p->trace_reg=reg; p->bus_error=io->write(io->ctx,reg,v); return p->bus_error==GYRO_BUS_OK; }
 void Icm_Begin(Icm42688 *p,uint32_t now)
 { memset(p,0,sizeof(*p)); p->due=now+3u; }
 /*
@@ -78,6 +78,7 @@ int Icm_Step(Icm42688 *p,const GyroIo *io,uint32_t now)
 {
     uint8_t v;
     if ((int32_t)(now-p->due)<0) return ICM_NO_DATA;
+    p->trace_stage=GYRO_TRACE_INIT;
     switch (p->phase) {
     case 0u: if (!wr(p,io,REG_BANK_SEL,0u)) return ICM_BUS_ERROR; break;
     case 1u:
@@ -128,6 +129,7 @@ int Icm_Step(Icm42688 *p,const GyroIo *io,uint32_t now)
 int Icm_Fetch(Icm42688 *p,const GyroIo *io,int16_t raw[3],uint32_t *sample_ms)
 {
     uint8_t status, readings[6]; unsigned i; uint32_t began;
+    p->trace_stage=GYRO_TRACE_SAMPLE;
     /* Same upstream fetch contract: DRDY gate, ONE coherent burst, BE signed
        parse. Clear on sense read prevents a status->burst update from being
        counted twice. Equal values in separate DRDY events remain new samples. */
@@ -150,6 +152,7 @@ int Icm_Check(Icm42688 *p,const GyroIo *io)
     static const uint8_t regs[]={REG_WHO_AM_I,REG_BANK_SEL,REG_PWR_MGMT0,REG_GYRO_CONFIG0,REG_INTF_CONFIG0};
     static const uint8_t values[]={WHO_AM_I_ICM42688,0x00u,0x2Cu,GYRO_CONFIG0_VALUE,0x32u};
     uint8_t v,index=p->check_index;
+    p->trace_stage=GYRO_TRACE_CHECK;
     if (!rd(p,io,regs[index],&v,1u)) return ICM_BUS_ERROR;
     if (index==0u) p->who=v;
     if (v!=values[index]) return index==0u ? ICM_ID_ERROR : ICM_CONFIG_ERROR;

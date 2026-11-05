@@ -583,6 +583,17 @@ static void render_pages(void)
     a.ui.more=1; a.ui.redraw=1;
     finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
     CHECK(contains(&a.ui,"LBUS:NACK")); save_image("ui_gyro_recovery.pgm");
+    g.first_bus_failure.valid=g.last_bus_failure.valid=1u;
+    g.first_bus_failure.stage=GYRO_TRACE_INIT; g.first_bus_failure.phase=7u;
+    g.first_bus_failure.index=25u; g.first_bus_failure.op='W';
+    g.first_bus_failure.reg=0x4Eu; g.first_bus_failure.bus=GYRO_BUS_BOTH_LOW;
+    g.last_bus_failure=g.first_bus_failure; g.last_bus_failure.stage=GYRO_TRACE_SAMPLE;
+    g.last_bus_failure.op='R'; g.last_bus_failure.reg=0x2Du;
+    g.last_bus_failure.bus=GYRO_BUS_TIMEOUT; a.ui.redraw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"FIRST:INIT7.25 W:4E BOTH_LOW"));
+    CHECK(contains(&a.ui,"RECENT:SAMPLE R:2D TIMEOUT"));
+    save_image("ui_gyro_failure_records.pgm");
     CHECK(!bad_layout); puts("PASS: rendered all 20 page variants, bounds, extreme counts, phase priority and invalid coordinates");
 }
 static void gyro_ready(QrApp *a)

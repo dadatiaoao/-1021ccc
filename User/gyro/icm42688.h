@@ -15,9 +15,15 @@ typedef struct {
     uint32_t (*cycles)(void *ctx);
     uint32_t cycles_per_us;
 } GyroIo;
+enum { GYRO_TRACE_BUS_INIT, GYRO_TRACE_INIT, GYRO_TRACE_SAMPLE, GYRO_TRACE_CHECK };
+typedef struct {
+    uint8_t valid, stage, phase, index, op, reg;
+    GyroBusError bus;
+} GyroBusFailure;
 typedef struct {
     uint32_t due;
     uint8_t phase, index, verify, who, check_index;
+    uint8_t trace_stage, trace_op, trace_reg;
     GyroBusError bus_error;
 } Icm42688;
 enum { ICM_NO_DATA=0, ICM_READY=1, ICM_BUS_ERROR=-1, ICM_ID_ERROR=-2,

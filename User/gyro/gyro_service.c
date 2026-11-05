@@ -43,6 +43,16 @@ static GyroError chip_error(int r)
  */
 static void fault(GyroService *s,int r,uint32_t now)
 {
+    if (r==ICM_BUS_ERROR) {
+        GyroBusFailure *f=&s->data.last_bus_failure;
+        f->valid=1u; f->stage=s->chip.trace_stage;
+        f->phase=s->chip.phase;
+        f->index=f->stage==GYRO_TRACE_CHECK ? s->chip.check_index : s->chip.index;
+        f->op=s->chip.trace_op; f->reg=s->chip.trace_reg; f->bus=s->chip.bus_error;
+        /* Retained across retries, successful samples, ZERO and CAL.
+           Only a full Gyro_Init starts a new diagnostic session. */
+        if (!s->data.first_bus_failure.valid) s->data.first_bus_failure=*f;
+    }
     if (s->data.calibration==GYRO_CAL_RUNNING) cal_fail(s,GYRO_CAL_ERROR);
     gap(s,chip_error(r)); s->data.state=GYRO_ERROR;
     s->data.raw_valid=s->data.rate_valid=0u;

@@ -217,9 +217,66 @@ static void test_visible_diagnostics(void)
     d.angle_gap=0u; d.have_sample=d.calibrated=1u; d.interval_ms=10u; d.age_ms=2u;
     GyroUi_Line(line,6u,0u,&d); CHECK(!strcmp(line,"DT:10 AGE:2 ms"));
 }
+static void test_bus_failure_records(void)
+{
+    GyroService s; GyroMock m; GyroSnapshot snap; GyroBusFailure first;
+    unsigned phase,verify,n; char line[43];
+    /* Fail the next real transaction in every initialization phase,
+       including both write and readback in the settings phase. */
+    for (phase=0u;phase<=7u;++phase) for (verify=0u;verify<2u;++verify) {
+        if (phase!=7u && verify) continue;
+        GyroMock_Reset(&m,0u); Gyro_Init(&s,GyroMock_Io(&m),0u);
+        for(n=0u;n<300u && (s.chip.phase!=phase || s.chip.verify!=verify);++n)
+            step(&s,&m,m.now+1u,0u);
+        CHECK(s.chip.phase==phase && s.chip.verify==verify);
+        m.failure=GYRO_BUS_NACK;
+        for(n=0u;n<60u && s.data.state!=GYRO_ERROR;++n) step(&s,&m,m.now+1u,0u);
+        first=s.data.first_bus_failure;
+        CHECK(first.valid && first.stage==GYRO_TRACE_INIT && first.phase==phase);
+        CHECK(first.op==((phase==0u || phase==3u || (phase==7u && !verify)) ? 'W':'R'));
+        CHECK(first.reg==(phase<2u ? 0x76u : (phase==2u || phase==6u ? 0x75u :
+                         (phase==3u || phase==4u ? 0x11u : (phase==5u ? 0x2Du : 0x76u)))));
+        CHECK(first.bus==GYRO_BUS_NACK);
+        if(phase==3u) {
+            GyroUi_Line(line,4u,1u,&s.data);
+            CHECK(!strcmp(line,"FIRST:INIT3.0 W:11 NACK"));
+        }
+        /* Repeated failures change RECENT but never FIRST. */
+        m.failure=GYRO_BUS_TIMEOUT; run(&s,&m,300u);
+        CHECK(s.data.last_bus_failure.bus==GYRO_BUS_TIMEOUT);
+        CHECK(!memcmp(&first,&s.data.first_bus_failure,sizeof(first)));
+        m.failure=GYRO_BUS_OK; run(&s,&m,800u);
+        CHECK(s.data.raw_valid);
+        CHECK(!memcmp(&first,&s.data.first_bus_failure,sizeof(first)));
+        /* First sample-status read failure after recovery. */
+        m.failure=GYRO_BUS_SDA_LOW; m.fail_reg=0x2D;
+        run(&s,&m,20u);
+        CHECK(s.data.last_bus_failure.stage==GYRO_TRACE_SAMPLE);
+        CHECK(s.data.last_bus_failure.op=='R' && s.data.last_bus_failure.reg==0x2Du);
+        Gyro_GetSnapshot(&s,m.now,&snap);
+        CHECK(!memcmp(&first,&snap.first_bus_failure,sizeof(first)));
+        GyroUi_Line(line,6u,1u,&snap); CHECK(!strcmp(line,"RECENT:SAMPLE R:2D SDA_LOW"));
+        m.failure=GYRO_BUS_OK; run(&s,&m,1000u); cal(&s,&m);
+        CHECK(Gyro_ZeroAngle(&s,m.now));
+        CHECK(!memcmp(&first,&s.data.first_bus_failure,sizeof(first)));
+        Gyro_Init(&s,GyroMock_Io(&m),m.now);
+        CHECK(!s.data.first_bus_failure.valid && !s.data.last_bus_failure.valid);
+        GyroUi_Line(line,4u,1u,&s.data); CHECK(!strcmp(line,"FIRST:NONE"));
+        GyroUi_Line(line,6u,1u,&s.data); CHECK(!strcmp(line,"RECENT:NONE"));
+    }
+    GyroMock_Reset(&m,0u); m.init_failure=GYRO_BUS_IO;
+    Gyro_Init(&s,GyroMock_Io(&m),0u);
+    CHECK(s.data.first_bus_failure.valid && s.data.first_bus_failure.stage==GYRO_TRACE_BUS_INIT);
+    GyroUi_Line(line,4u,1u,&s.data); CHECK(!strcmp(line,"FIRST:BUS_INIT -- IO"));
+    setup(&s,&m,0u); s.last_check=m.now-GYRO_CHECK_MS; s.last_poll=m.now-GYRO_POLL_MS;
+    m.failure=GYRO_BUS_NACK; step(&s,&m,m.now+1u,0u);
+    CHECK(s.data.first_bus_failure.stage==GYRO_TRACE_CHECK);
+    CHECK(s.data.first_bus_failure.reg==0x75u && s.data.first_bus_failure.op=='R');
+    GyroUi_Line(line,4u,1u,&s.data); CHECK(!strcmp(line,"FIRST:CHECK0 R:75 NACK"));
+}
 int main(void)
 {
-    test_visible_diagnostics(); test_chip(); test_service(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
+    test_bus_failure_records(); test_visible_diagnostics(); test_chip(); test_service(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
     printf("GYRO PASS %u checks, axis %u sign %d, service %u bytes (host ABI)\n",checks,GYRO_AXIS,GYRO_SIGN,(unsigned)sizeof(GyroService));
     return 0;
 }
