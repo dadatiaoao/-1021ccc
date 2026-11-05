@@ -5,17 +5,21 @@
  * Init 只在启动时执行，Process 从主循环反复调用；服务之间通过此编排层协作。
  */
 #include "qr_ui.h"
-#include "servo/servo_control.h"
-#include "mission/mission.h"
 #include "./motor/motor_bus.h"
 #include "./gyro/gyro_service.h"
+#include "./mission/mission_runtime.h"
 typedef struct {
     MotorBus motor; QrService qr; QrUi ui; GyroService gyro;
-    Chassis chassis;
-    Mechanism mechanism;
     ServoDualState servo;
+    Chassis chassis;
+    VisionService vision;
+    MissionRuntime mission_runtime;
     Mission mission;
+    Mechanism mechanism;
+    Departure departure;
 } QrApp;
 void QrApp_Init(QrApp *app, MotorTransport motor, uint8_t qr_ready, uint32_t now_ms);
 void QrApp_Process(QrApp *app, uint32_t now_ms);
+/* Shared entry for the screen bench button and a future K230 START event. */
+int QrApp_StartMission(QrApp *app, uint32_t now_ms);
 #endif

@@ -1,4 +1,4 @@
-﻿#include "mission.h"
+#include "mission.h"
 #include <string.h>
 
 static void fail(Mission *m, MissionError error, uint32_t now)
@@ -112,11 +112,12 @@ void Mission_Process(Mission *m, uint32_t now)
     if (result==MISSION_WAIT) return;
     if (result!=MISSION_SUCCEEDED) { fail(m,MISSION_ACTION_ERROR,now); return; }
     if (m->action.step==MISSION_READ_QR && !accept_task(m,&task)) { fail(m,MISSION_BAD_TASK,now); return; }
-    /* Count external picks and external placements, not onboard slot transfers. */
-    if (m->action.step==MISSION_SOURCE_TO_SLOT || m->action.step==MISSION_ROUGH_TO_SLOT)
-        ++m->grasp_count;
-    if (m->action.step==MISSION_SLOT_TO_ROUGH || m->action.step==MISSION_SLOT_TO_STORAGE)
-        ++m->place_count;
+    if (m->action.step==MISSION_SOURCE_TO_SLOT || m->action.step==MISSION_SLOT_TO_ROUGH ||
+        m->action.step==MISSION_ROUGH_TO_SLOT || m->action.step==MISSION_SLOT_TO_STORAGE) {
+        /* Each complete transfer contains one grasp and one release, including
+           onboard slots. These counts are sequence inference, not detection. */
+        ++m->grasp_count; ++m->place_count;
+    }
     ++m->completed_actions; m->active=0u; next(m);
 }
 const char *Mission_StateName(MissionState s)

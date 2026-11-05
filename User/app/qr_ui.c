@@ -1,18 +1,20 @@
-/* Dashboard and module pages. Navigation never owns motion. */
+Ôªø/* Dashboard and module pages. Navigation never owns motion. */
 #include "qr_ui.h"
 #include "./lcd/bsp_lcd.h"
 #include "./lcd/lcd_orientation.h"
 #include "./fonts/ui_glyphs.h"
 #include "./gyro/gyro_ui.h"
-#include "mission/mission_ui.h"
+#include "./vision/vision_ui.h"
+#include "./mission/mission_ui.h"
+#include "./servo/servo_pwm.h"
 #include <stdio.h>
 #include <string.h>
 
 enum { DRAW_IDLE, DRAW_CLEAR, DRAW_WIDGET, DRAW_FILL, DRAW_TEXT };
 static const uint16_t nav_x[5]={8u,104u,200u,296u,384u};
 static const uint16_t nav_w[5]={88u,88u,88u,80u,88u};
-static const char * const titles[]={/* ‘À––◊‹¿¿ */ "\350\277\220\350\241\214\346\200\273\350\247\210",/* µÁª˙◊¥Ã¨ */ "\347\224\265\346\234\272\347\212\266\346\200\201",/* Õ”¬›“« */ "\351\231\200\350\236\272\344\273\252",/* …®¬Î»ŒŒÒ */ "\346\211\253\347\240\201\344\273\273\345\212\241",
-    /*  ”æıÕ®–≈ */ "\350\247\206\350\247\211\351\200\232\344\277\241",/* µ◊≈ÃŒª÷√Ω‚À„ */ "\345\272\225\347\233\230\344\275\215\347\275\256\350\247\243\347\256\227",/* ª˙–µ±€»˝÷· */ "\346\234\272\346\242\260\350\207\202\344\270\211\350\275\264",/* œﬁŒªø™πÿ */ "\351\231\220\344\275\215\345\274\200\345\205\263","SERVO / PA6 + PC8","RACE / NOT CONNECTED"};
+static const char * const titles[]={/* ËøêË°åÊÄªËßà */ "\350\277\220\350\241\214\346\200\273\350\247\210",/* ÁîµÊú∫Áä∂ÊÄÅ */ "\347\224\265\346\234\272\347\212\266\346\200\201",/* ÈôÄËû∫‰ª™ */ "\351\231\200\350\236\272\344\273\252",/* Êâ´Á†Å‰ªªÂä° */ "\346\211\253\347\240\201\344\273\273\345\212\241",/* ËàµÊú∫ */ "\350\210\265\346\234\272",
+    /* ËßÜËßâÈÄö‰ø° */ "\350\247\206\350\247\211\351\200\232\344\277\241",/* Â∫ïÁõò‰ΩçÁΩÆËß£ÁÆó */ "\345\272\225\347\233\230\344\275\215\347\275\256\350\247\243\347\256\227",/* Êú∫Ê¢∞ËáÇ‰∏âËΩ¥ */ "\346\234\272\346\242\260\350\207\202\344\270\211\350\275\264",/* Èôê‰ΩçÂºÄÂÖ≥ */ "\351\231\220\344\275\215\345\274\200\345\205\263","RACE / ZONE 2","ZONE 2 -> QR TEST","DRIVE UNTIL QR / 20RPM"};
 
 static UiWidget *item(QrUi *u,unsigned x,unsigned y,unsigned w,unsigned h,
     unsigned button,const char *text)
@@ -26,9 +28,9 @@ static UiWidget *item(QrUi *u,unsigned x,unsigned y,unsigned w,unsigned h,
 static void row(QrUi *u,unsigned index,const char *text)
 { (void)item(u,8u,44u+index*24u,464u,22u,0u,text); }
 static void open_page(QrUi *u,uint8_t page)
-{ u->page=page; u->more=0u; u->redraw=1u; u->gyro_notice=0; }
+{ u->page=page; u->more=0u; u->redraw=1u; }
 void QrUi_Init(QrUi *u)
-{ memset(u,0,sizeof(*u)); u->redraw=1u; }
+{ memset(u,0,sizeof(*u)); u->redraw=1u; u->vision_color=u->vision_zone=u->vision_position=1u; }
 static int hit(int32_t x,int32_t y,int32_t bx,int32_t by,int32_t w,int32_t h)
 { return x>=bx && x<bx+w && y>=by && y<by+h; }
 
@@ -39,25 +41,44 @@ QrUiAction QrUi_Touch(QrUi *u,int32_t x,int32_t y,uint8_t down)
     u->was_down=down;
     if (!edge || x<0 || y<0 || x>=480 || y>=272) return QR_UI_NONE;
     x=LCD_TOUCH_X(x); y=LCD_TOUCH_Y(y);
+    if (u->page==UI_RUN_ONLY) {
+        if (hit(x,y,8,196,216,30)) return QR_UI_RUN_FORWARD;
+        if (hit(x,y,244,196,228,30)) return QR_UI_RUN_REVERSE;
+        if (hit(x,y,8,232,464,32)) return QR_UI_STOP_ALL;
+        return QR_UI_NONE;
+    }
     for (i=0u;i<5u;++i) if (hit(x,y,nav_x[i],232,nav_w[i],32)) {
         static const uint8_t pages[]={UI_HOME,UI_CHASSIS,UI_MECHANISM,UI_LIMITS};
         if (i==4u) return QR_UI_STOP_ALL;
         open_page(u,pages[i]); return QR_UI_NONE;
     }
     if (hit(x,y,400,4,72,32)) { u->more=(uint8_t)!u->more; u->redraw=1u; return QR_UI_NONE; }
-    if (u->page==UI_HOME && u->more && hit(x,y,8,196,216,30)) { open_page(u,UI_SERVO); return QR_UI_NONE; }
-    if (u->page==UI_HOME && u->more && hit(x,y,248,196,224,30)) { open_page(u,UI_RACE); return QR_UI_NONE; }
+    if (u->page==UI_HOME && u->more && hit(x,y,8,196,216,30)) { open_page(u,UI_RACE); return QR_UI_NONE; }
     if (u->page==UI_RACE && hit(x,y,8,196,216,30)) return QR_UI_MISSION_START;
+    if (u->page==UI_RACE && hit(x,y,244,196,228,30)) { open_page(u,UI_DEPARTURE); return QR_UI_NONE; }
+    if (u->page==UI_DEPARTURE && hit(x,y,8,196,216,30)) return QR_UI_DEPARTURE_START;
     if (u->page==UI_SERVO) {
-        for (i=0u;i<8u;++i) if (hit(x,y,4+(int)(i%4u)*119,112+(int)(i/4u)*48,114,36))
-            return (QrUiAction)(QR_UI_SERVO_JAW_ON+i);
+        for (i=0u;i<8u;++i) {
+            int bx=4+(int)(i%4u)*119, by=112+(int)(i/4u)*48;
+            if (hit(x,y,bx,by,114,36)) return (QrUiAction)(QR_UI_SERVO_JAW_ON+i);
+        }
+        return QR_UI_NONE;
+    }
+    if (u->page==UI_VISION) {
+        if (hit(x,y,8,196,140,30)) return QR_UI_VISION_SCAN;
+        if (hit(x,y,160,196,140,30)) return QR_UI_VISION_STOP;
+        if (hit(x,y,8,68,464,22)) u->vision_mode=(uint8_t)((u->vision_mode+1u)%5u);
+        if (hit(x,y,8,92,464,22)) {
+            if (x<160) u->vision_color=(uint8_t)(u->vision_color%6u+1u);
+            else if (x<312) u->vision_zone=(uint8_t)(u->vision_zone%2u+1u);
+            else u->vision_position=(uint8_t)(u->vision_position%3u+1u);
+        }
         return QR_UI_NONE;
     }
     if (u->page==UI_HOME && !u->more) {
-        static const uint8_t pages[]={UI_MOTOR,UI_GYRO,UI_QR,UI_HOME,UI_VISION,UI_MECHANISM};
+        static const uint8_t pages[]={UI_MOTOR,UI_GYRO,UI_QR,UI_SERVO,UI_VISION,UI_MECHANISM};
         for (i=0u;i<6u;++i) if (hit(x,y,8+(int)(i%3u)*158,104+(int)(i/3u)*62,148,52)) {
-            if (i!=3u) open_page(u,pages[i]); /* Mouse module has no page yet. */
-            return QR_UI_NONE;
+            open_page(u,pages[i]); return QR_UI_NONE;
         }
     } else if (u->page==UI_MOTOR) {
         if (!u->more) {
@@ -97,18 +118,17 @@ static const char *node_state(const MotorNode *n,uint32_t now)
 static const char *phase(const QrUi *u,const MotorBus *b)
 {
     const Mechanism *m=u->mechanism; const Chassis *c=u->chassis; unsigned i;
-    if ((m && m->data.stop_pending) || (c && c->data.stop_pending)) return /* Õ£≥µ»∑»œ÷– */ "\345\201\234\350\275\246\347\241\256\350\256\244\344\270\255";
-    for (i=0u;i<MOTOR_COUNT;++i) if (b->nodes[i].stop_unconfirmed) return /* Õ£≥µŒ¥»∑»œ */ "\345\201\234\350\275\246\346\234\252\347\241\256\350\256\244";
-    if ((m && m->data.state==MECH_FAULT) || (c && c->data.state==CHASSIS_FAULT)) return /* π ’œ¥˝¥¶¿Ì */ "\346\225\205\351\232\234\345\276\205\345\244\204\347\220\206";
-    if (m && Mechanism_OwnsAxes(m)) return m->data.homing ? /* ª˙ππªÿ¡„÷– */ "\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255" : /* ª˙ππ∂Ø◊˜÷– */ "\346\234\272\346\236\204\345\212\250\344\275\234\344\270\255";
-    if (c && Chassis_OwnsWheels(c)) return c->data.sequence_active ? /* µ◊≈Ã—È ’÷– */ "\345\272\225\347\233\230\351\252\214\346\224\266\344\270\255" : /* µ◊≈Ã‘À∂Ø÷– */ "\345\272\225\347\233\230\350\277\220\345\212\250\344\270\255";
-    if (m && m->auto_pending) return /* …œµÁ◊º±∏÷– */ "\344\270\212\347\224\265\345\207\206\345\244\207\344\270\255";
-    if ((m && m->data.result==MECH_CANCELLED) || (c && c->data.result==CHASSIS_CANCELLED)) return /* “—Õ£÷π */ "\345\267\262\345\201\234\346\255\242";
-    if (m && (!m->data.reference[0] || !m->data.reference[1] || !m->data.trim_ready)) return /* µ»¥˝ª˙ππæÕ–˜ */ "\347\255\211\345\276\205\346\234\272\346\236\204\345\260\261\347\273\252";
-    return /* ¥˝ª˙ */ "\345\276\205\346\234\272";
+    if ((m && m->data.stop_pending) || (c && c->data.stop_pending)) return /* ÂÅúËΩ¶Á°ÆËÆ§‰∏≠ */ "\345\201\234\350\275\246\347\241\256\350\256\244\344\270\255";
+    for (i=0u;i<MOTOR_COUNT;++i) if (b->nodes[i].stop_unconfirmed) return /* ÂÅúËΩ¶Êú™Á°ÆËÆ§ */ "\345\201\234\350\275\246\346\234\252\347\241\256\350\256\244";
+    if ((m && m->data.state==MECH_FAULT) || (c && c->data.state==CHASSIS_FAULT)) return /* ÊïÖÈöúÂæÖÂ§ÑÁêÜ */ "\346\225\205\351\232\234\345\276\205\345\244\204\347\220\206";
+    if (m && Mechanism_OwnsAxes(m)) return m->data.homing ? /* Êú∫ÊûÑÂõûÈõ∂‰∏≠ */ "\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255" : /* Êú∫ÊûÑÂä®‰Ωú‰∏≠ */ "\346\234\272\346\236\204\345\212\250\344\275\234\344\270\255";
+    if (c && Chassis_OwnsWheels(c)) return c->data.sequence_active ? /* Â∫ïÁõòÈ™åÊî∂‰∏≠ */ "\345\272\225\347\233\230\351\252\214\346\224\266\344\270\255" : /* Â∫ïÁõòËøêÂä®‰∏≠ */ "\345\272\225\347\233\230\350\277\220\345\212\250\344\270\255";
+    if (m && m->auto_pending) return /* ‰∏äÁîµÂáÜÂ§á‰∏≠ */ "\344\270\212\347\224\265\345\207\206\345\244\207\344\270\255";
+    if ((m && m->data.result==MECH_CANCELLED) || (c && c->data.result==CHASSIS_CANCELLED)) return /* Â∑≤ÂÅúÊ≠¢ */ "\345\267\262\345\201\234\346\255\242";
+    if (m && (!m->data.reference[0] || !m->data.reference[1] || !m->data.trim_ready)) return /* Á≠âÂæÖÊú∫ÊûÑÂ∞±Áª™ */ "\347\255\211\345\276\205\346\234\272\346\236\204\345\260\261\347\273\252";
+    return /* ÂæÖÊú∫ */ "\345\276\205\346\234\272";
 }
-static void home(QrUi *u,const QrService *q,const MotorBus *b,
-    const GyroSnapshot *g,uint32_t now)
+static void home(QrUi *u,const QrService *q,const MotorBus *b,const GyroSnapshot *g,uint32_t now)
 {
     char t[UI_TEXT_BYTES],status[6][40]; unsigned i,online=0u,stops=0u;
     for (i=0u;i<MOTOR_COUNT;++i) {
@@ -125,24 +145,30 @@ static void home(QrUi *u,const QrService *q,const MotorBus *b,
         else if (u->chassis && u->chassis->data.sequence_active &&
             !u->chassis->data.stop_pending && !stops && u->chassis->data.state!=CHASSIS_FAULT)
             snprintf(step,sizeof(step)," [%u/8]",u->chassis->data.stage);
-        snprintf(t,sizeof(t),/* Ω◊∂Œ: %s%s%s */ "\351\230\266\346\256\265: %s%s%s",p,step,MECHANISM_TRIAL_RUN ? " / TRIAL" : ""); row(u,0u,t);
+        snprintf(t,sizeof(t),/* Èò∂ÊÆµ: %s%s%s */ "\351\230\266\346\256\265: %s%s%s",p,step,MECHANISM_TRIAL_RUN ? " / TRIAL" : ""); row(u,0u,t);
     }
     if (u->more) {
-        row(u,1u,/* ±»»¸¡˜≥Ã: …–Œ¥Ω”»Î */ "\346\257\224\350\265\233\346\265\201\347\250\213: \345\260\232\346\234\252\346\216\245\345\205\245"); row(u,2u,"K230 READY / START: NOT IMPLEMENTED");
+        row(u,1u,"RACE / ZONE 2: see START gate"); row(u,2u,"K230 UART1: linked protocol");
         snprintf(t,sizeof(t),"UART5 TX:%lu RX:%lu",(unsigned long)b->tx_frames,(unsigned long)b->rx_frames); row(u,3u,t);
         snprintf(t,sizeof(t),"STOP?:%u UI MAX:%lu ms",stops,(unsigned long)u->max_step_ms); row(u,4u,t);
-        row(u,5u,/* Œª◊ÀŒ™π¿À„÷µ£¨ªÿ¡„≤Œ ˝»‘–Ë±Í∂® */ "\344\275\215\345\247\277\344\270\272\344\274\260\347\256\227\345\200\274\357\274\214\345\233\236\351\233\266\345\217\202\346\225\260\344\273\215\351\234\200\346\240\207\345\256\232");
-        (void)item(u,8,196,216,30,1,"SERVOS");
-        (void)item(u,248,196,224,30,1,"RACE FRAMEWORK"); return;
+        row(u,5u,/* ‰ΩçÂßø‰∏∫‰º∞ÁÆóÂÄºÔºåÂõûÈõ∂ÂèÇÊï∞‰ªçÈúÄÊ†áÂÆö */ "\344\275\215\345\247\277\344\270\272\344\274\260\347\256\227\345\200\274\357\274\214\345\233\236\351\233\266\345\217\202\346\225\260\344\273\215\351\234\200\346\240\207\345\256\232");
+        (void)item(u,8,196,216,30,1,"RACE / ZONE 2"); return;
     }
-    snprintf(t,sizeof(t),/* »ŒŒÒ: %s */ "\344\273\273\345\212\241: %s",q->data.valid ? q->data.current.text : /* µ»¥˝…®¬Î */ "\347\255\211\345\276\205\346\211\253\347\240\201"); row(u,1u,t);
+    snprintf(t,sizeof(t),/* ‰ªªÂä°: %s */ "\344\273\273\345\212\241: %s",q->data.valid ? q->data.current.text : /* Á≠âÂæÖÊâ´Á†Å */ "\347\255\211\345\276\205\346\211\253\347\240\201"); row(u,1u,t);
     snprintf(status[0],40,"%u/7 %s",online,stops ? "STOP?" : "ONLINE");
     snprintf(status[1],40,"%.12s",g ? Gyro_StateName(g) : "--");
     snprintf(status[2],40,"%s",q->data.valid ? "CODE LOCKED" : q->data.uart_ready ? "WAIT CODE" : "UART ERROR");
-    strcpy(status[3],"NOT LINKED"); strcpy(status[4],"NOT LINKED");
+#if defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME
+    if (u->servo_ready) snprintf(status[3],40,"J:%s T:%s",
+        Servo_IsEnabled(0u) ? "ON" : "OFF",Servo_IsEnabled(1u) ? "ON" : "OFF");
+    else strcpy(status[3],"NOT READY");
+#else
+    snprintf(status[3],40,"NOT READY");
+#endif
+    snprintf(status[4],40,"%.12s",u->vision ? VisionService_StateName(u->vision) : "--");
     snprintf(status[5],40,"%.12s",u->mechanism ? Mechanism_StateName(u->mechanism->data.state) : "--");
     for (i=0u;i<6u;++i) {
-        static const char * const names[]={/* µÁª˙ */ "\347\224\265\346\234\272",/* Õ”¬›“« */ "\351\231\200\350\236\272\344\273\252",/* …®¬Î */ "\346\211\253\347\240\201",/*  Û±ÍŒª“∆ƒ£øÈ */ "\351\274\240\346\240\207\344\275\215\347\247\273\346\250\241\345\235\227",/*  ”æı */ "\350\247\206\350\247\211",/* ª˙–µ±€ */ "\346\234\272\346\242\260\350\207\202"};
+        static const char * const names[]={/* ÁîµÊú∫ */ "\347\224\265\346\234\272",/* ÈôÄËû∫‰ª™ */ "\351\231\200\350\236\272\344\273\252",/* Êâ´Á†Å */ "\346\211\253\347\240\201",/* ËàµÊú∫ */ "\350\210\265\346\234\272",/* ËßÜËßâ */ "\350\247\206\350\247\211",/* Êú∫Ê¢∞ËáÇ */ "\346\234\272\346\242\260\350\207\202"};
         snprintf(t,sizeof(t),"%s\n%s",names[i],status[i]);
         (void)item(u,8u+(i%3u)*158u,104u+(i/3u)*62u,148u,52u,1u,t);
     }
@@ -170,7 +196,7 @@ static void motors(QrUi *u,const MotorBus *b,uint32_t now)
     row(u,3u,t);
     snprintf(t,sizeof(t),"RX:%lu TIMEOUT:%lu ERR:%u",(unsigned long)d->rx_count,(unsigned long)d->timeouts,d->last_error); row(u,4u,t);
     snprintf(t,sizeof(t),"%.42s",b->message); row(u,5u,t);
-    (void)item(u,8,196,140,30,1,/* …œ“ª÷· */ "\344\270\212\344\270\200\350\275\264"); (void)item(u,160,196,140,30,1,/* œ¬“ª÷· */ "\344\270\213\344\270\200\350\275\264");
+    (void)item(u,8,196,140,30,1,/* ‰∏ä‰∏ÄËΩ¥ */ "\344\270\212\344\270\200\350\275\264"); (void)item(u,160,196,140,30,1,/* ‰∏ã‰∏ÄËΩ¥ */ "\344\270\213\344\270\200\350\275\264");
 }
 static void qr(QrUi *u,const QrService *q,uint32_t now)
 {
@@ -178,9 +204,9 @@ static void qr(QrUi *u,const QrService *q,uint32_t now)
     snprintf(t,sizeof(t),"%s / SESSION %lu",QrService_StateName(q),(unsigned long)d->session); row(u,0u,t);
     if (!u->more) {
         UiWidget *v=item(u,8,76,464,32,0,d->valid ? d->current.text : "---+---+---+---"); v->large=1u;
-        row(u,3u,d->valid ? /* »ŒŒÒ¬Î“—À¯∂® */ "\344\273\273\345\212\241\347\240\201\345\267\262\351\224\201\345\256\232" : /* µ»¥˝”––ß»ŒŒÒ¬Î */ "\347\255\211\345\276\205\346\234\211\346\225\210\344\273\273\345\212\241\347\240\201");
+        row(u,3u,d->valid ? /* ‰ªªÂä°Á†ÅÂ∑≤ÈîÅÂÆö */ "\344\273\273\345\212\241\347\240\201\345\267\262\351\224\201\345\256\232" : /* Á≠âÂæÖÊúâÊïà‰ªªÂä°Á†Å */ "\347\255\211\345\276\205\346\234\211\346\225\210\344\273\273\345\212\241\347\240\201");
         snprintf(t,sizeof(t),"UART:%s WAIT:%lu s",d->uart_ready ? "OK" : "ERROR",(unsigned long)((now-d->session_ms)/1000u)); row(u,4u,t);
-        (void)item(u,8,196,216,30,1,/* ÷ÿ–¬…®¬Î */ "\351\207\215\346\226\260\346\211\253\347\240\201"); return;
+        (void)item(u,8,196,216,30,1,/* ÈáçÊñ∞Êâ´Á†Å */ "\351\207\215\346\226\260\346\211\253\347\240\201"); return;
     }
     snprintf(t,sizeof(t),"RX:%lu RECORD:%lu",(unsigned long)d->raw_bytes,(unsigned long)d->records); row(u,1u,t);
     snprintf(t,sizeof(t),"ACCEPT:%lu DUP:%lu",(unsigned long)d->accepted_seq,(unsigned long)d->duplicates); row(u,2u,t);
@@ -197,7 +223,7 @@ static void chassis(QrUi *u,uint32_t now)
     if (!u->more) {
         const ChassisOdometry *o=&c->odometry;
         uint8_t valid=(uint8_t)(o->valid && now-o->sample_ms<=MOTOR_BUS_FRESH_MS);
-        row(u,0u,/* ¬÷∂À¿Ô≥Ãº∆ / µ±«∞¡¨–¯◊¯±Í∂Œ */ "\350\275\256\347\253\257\351\207\214\347\250\213\350\256\241 / \345\275\223\345\211\215\350\277\236\347\273\255\345\235\220\346\240\207\346\256\265");
+        row(u,0u,/* ËΩÆÁ´ØÈáåÁ®ãËÆ° / ÂΩìÂâçËøûÁª≠ÂùêÊ†áÊÆµ */ "\350\275\256\347\253\257\351\207\214\347\250\213\350\256\241 / \345\275\223\345\211\215\350\277\236\347\273\255\345\235\220\346\240\207\346\256\265");
         if (valid) { decimal(a,o->x); decimal(b,o->y); decimal(v,o->angle); }
         else { strcpy(a,"--"); strcpy(b,"--"); strcpy(v,"--"); }
         snprintf(t,sizeof(t),"X: %s mm",a); row(u,1u,t);
@@ -206,7 +232,7 @@ static void chassis(QrUi *u,uint32_t now)
         snprintf(t,sizeof(t),"%s  SEG:%lu",valid ? "VALID" : "INVALID / WAIT",(unsigned long)o->generation); row(u,4u,t);
         snprintf(t,sizeof(t),"%s %u/8 %s",Chassis_StateName(d->state),d->stage,Chassis_StageName(d->stage)); row(u,5u,t);
         row(u,6u,Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason : d->rejection));
-        row(u,7u,/* ¥Úª¨≤ªø…π€≤‚£¨∂œ¡¥∫Û÷ÿ–¬Ω®¡¢◊¯±Í∂Œ */ "\346\211\223\346\273\221\344\270\215\345\217\257\350\247\202\346\265\213\357\274\214\346\226\255\351\223\276\345\220\216\351\207\215\346\226\260\345\273\272\347\253\213\345\235\220\346\240\207\346\256\265"); return;
+        row(u,7u,/* ÊâìÊªë‰∏çÂèØËßÇÊµãÔºåÊñ≠ÈìæÂêéÈáçÊñ∞Âª∫Á´ãÂùêÊ†áÊÆµ */ "\346\211\223\346\273\221\344\270\215\345\217\257\350\247\202\346\265\213\357\274\214\346\226\255\351\223\276\345\220\216\351\207\215\346\226\260\345\273\272\347\253\213\345\235\220\346\240\207\346\256\265"); return;
     }
     snprintf(t,sizeof(t),"%s %u/8 %s",Chassis_StateName(d->state),d->stage,Chassis_StageName(d->stage)); row(u,0u,t);
     for (i=0u;i<4u;++i) {
@@ -216,7 +242,7 @@ static void chassis(QrUi *u,uint32_t now)
     }
     snprintf(t,sizeof(t),"%.20s / %.18s",Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason : d->rejection),
         d->fault.valid ? Chassis_OdometryIssueName(d->fault.issue) : Chassis_OdometryIssueName(c->odometry.last_issue)); row(u,5u,t);
-    (void)item(u,8,196,216,30,1,/* µ◊≈Ã∞À∂Œ—È ’ */ "\345\272\225\347\233\230\345\205\253\346\256\265\351\252\214\346\224\266");
+    (void)item(u,8,196,216,30,1,/* Â∫ïÁõòÂÖ´ÊÆµÈ™åÊî∂ */ "\345\272\225\347\233\230\345\205\253\346\256\265\351\252\214\346\224\266");
 }
 static void mechanism(QrUi *u,uint32_t now)
 {
@@ -227,26 +253,26 @@ static void mechanism(QrUi *u,uint32_t now)
     if (!u->more) {
         snprintf(t,sizeof(t),"%s%s",Mechanism_StateName(d->state),MECHANISM_TRIAL_RUN ? " / TRIAL" : ""); row(u,0u,t);
         for (i=0u;i<3u;++i) {
-            static const char * const names[]={/* 5 –˝◊™ */ "5 \346\227\213\350\275\254",/* 6 …˝Ωµ */ "6 \345\215\207\351\231\215",/* 7 …ÏÀı */ "7 \344\274\270\347\274\251"};
+            static const char * const names[]={/* 5 ÊóãËΩ¨ */ "5 \346\227\213\350\275\254",/* 6 ÂçáÈôç */ "6 \345\215\207\351\231\215",/* 7 ‰º∏Áº© */ "7 \344\274\270\347\274\251"};
             const MotorNode *n=&m->bus->nodes[i+4u];
             if (d->reference[i] && MotorBus_Fresh(n,MOTOR_VALID_POSITION,now) && n->data.online) decimal(v,d->position[i]); else strcpy(v,"--");
             snprintf(t,sizeof(t),"%s: %s %s / %s",names[i],v,i ? "mm" : "deg",refs[d->reference[i]]); row(u,i+1u,t);
         }
         row(u,4u,Mechanism_ReasonName(d->reason!=MECH_OK ? d->reason : d->rejection));
         row(u,5u,"5/6 HOME; 7 MIDPOINT");
-        row(u,6u,MECHANISM_TRIAL_RUN ? /* TRIAL: ¡Ÿ ±ªªÀ„≤Œ ˝£¨…–Œ¥±Í∂® */ "TRIAL: \344\270\264\346\227\266\346\215\242\347\256\227\345\217\202\346\225\260\357\274\214\345\260\232\346\234\252\346\240\207\345\256\232" : /* ªªÀ„≤Œ ˝–Ë µŒÔ±Í∂® */ "\346\215\242\347\256\227\345\217\202\346\225\260\351\234\200\345\256\236\347\211\251\346\240\207\345\256\232");
-        row(u,7u,/* MORE ≤Èø¥µ•÷·”Îªÿ¡„≤Ÿ◊˜ */ "MORE \346\237\245\347\234\213\345\215\225\350\275\264\344\270\216\345\233\236\351\233\266\346\223\215\344\275\234"); return;
+        row(u,6u,MECHANISM_TRIAL_RUN ? /* TRIAL: ‰∏¥Êó∂Êç¢ÁÆóÂèÇÊï∞ÔºåÂ∞öÊú™Ê†áÂÆö */ "TRIAL: \344\270\264\346\227\266\346\215\242\347\256\227\345\217\202\346\225\260\357\274\214\345\260\232\346\234\252\346\240\207\345\256\232" : /* Êç¢ÁÆóÂèÇÊï∞ÈúÄÂÆûÁâ©Ê†áÂÆö */ "\346\215\242\347\256\227\345\217\202\346\225\260\351\234\200\345\256\236\347\211\251\346\240\207\345\256\232");
+        row(u,7u,/* MORE Êü•ÁúãÂçïËΩ¥‰∏éÂõûÈõ∂Êìç‰Ωú */ "MORE \346\237\245\347\234\213\345\215\225\350\275\264\344\270\216\345\233\236\351\233\266\346\223\215\344\275\234"); return;
     }
     i=u->axis;
-    snprintf(t,sizeof(t),/* ÷· %u %s / µ„ª˜«–ªª÷· */ "\350\275\264 %u %s / \347\202\271\345\207\273\345\210\207\346\215\242\350\275\264",i+5u,MotorBus_Role((uint8_t)(i+5u)));
+    snprintf(t,sizeof(t),/* ËΩ¥ %u %s / ÁÇπÂáªÂàáÊç¢ËΩ¥ */ "\350\275\264 %u %s / \347\202\271\345\207\273\345\210\207\346\215\242\350\275\264",i+5u,MotorBus_Role((uint8_t)(i+5u)));
     (void)item(u,8,44,464,22,1,t);
     snprintf(t,sizeof(t),"REF:%s CFG:%lu",refs[d->reference[i]],(unsigned long)d->config_issues[i]); row(u,1u,t);
     snprintf(t,sizeof(t),"COUNTS:%lld%s",(long long)m->bus->nodes[i+4u].data.position_counts,
         MotorBus_Fresh(&m->bus->nodes[i+4u],MOTOR_VALID_POSITION,now) ? "" : " STALE"); row(u,2u,t);
     snprintf(t,sizeof(t),"%s AXIS:%u STAGE:%u/8",Mechanism_StateName(d->state),d->axis+5u,d->stage); row(u,3u,t);
     snprintf(t,sizeof(t),"%s STOP:%s",Mechanism_ReasonName(d->reason!=MECH_OK ? d->reason : d->rejection),d->stop_pending ? "UNCONF" : "OK"); row(u,4u,t);
-    row(u,5u,MECHANISM_TRIAL_RUN ? /* TRIAL: ¡Ÿ ±≤Œ ˝ */ "TRIAL: \344\270\264\346\227\266\345\217\202\346\225\260" : /* ∂Ø◊˜»‘ ‹±Í∂®”ÎœﬁŒª√≈øÿ */ "\345\212\250\344\275\234\344\273\215\345\217\227\346\240\207\345\256\232\344\270\216\351\231\220\344\275\215\351\227\250\346\216\247");
-    (void)item(u,8,196,140,30,1,/* ÷ÿ–¬ªÿ¡„ */ "\351\207\215\346\226\260\345\233\236\351\233\266"); (void)item(u,160,196,140,30,1,/* ª˙ππ—È ’ */ "\346\234\272\346\236\204\351\252\214\346\224\266");
+    row(u,5u,MECHANISM_TRIAL_RUN ? /* TRIAL: ‰∏¥Êó∂ÂèÇÊï∞ */ "TRIAL: \344\270\264\346\227\266\345\217\202\346\225\260" : /* Âä®‰Ωú‰ªçÂèóÊ†áÂÆö‰∏éÈôê‰ΩçÈó®Êéß */ "\345\212\250\344\275\234\344\273\215\345\217\227\346\240\207\345\256\232\344\270\216\351\231\220\344\275\215\351\227\250\346\216\247");
+    (void)item(u,8,196,140,30,1,/* ÈáçÊñ∞ÂõûÈõ∂ */ "\351\207\215\346\226\260\345\233\236\351\233\266"); (void)item(u,160,196,140,30,1,/* Êú∫ÊûÑÈ™åÊî∂ */ "\346\234\272\346\236\204\351\252\214\346\224\266");
 }
 static void limits(QrUi *u,uint32_t now)
 {
@@ -254,21 +280,22 @@ static void limits(QrUi *u,uint32_t now)
     if (!m) { row(u,0u,"UNAVAILABLE"); return; }
     for (i=0u;i<2u;++i) {
         const MechanismLimit *l=&m->data.limit[i];
-        snprintf(t,sizeof(t),"%u %s: %s",i+5u,i ? /* …˝Ωµ◊Ó…œ∂À */ "\345\215\207\351\231\215\346\234\200\344\270\212\347\253\257" : /* –˝◊™ ’¬£∂À */ "\346\227\213\350\275\254\346\224\266\346\213\242\347\253\257",!l->valid ? /* ≤…—˘¥˝Œ»∂® */ "\351\207\207\346\240\267\345\276\205\347\250\263\345\256\232" : l->stable ? /* ∞¥œ¬ / ∂œ¬∑ */ "\346\214\211\344\270\213 / \346\226\255\350\267\257" : /*  Õ∑≈ */ "\351\207\212\346\224\276"); row(u,i*2u,t);
+        snprintf(t,sizeof(t),"%u %s: %s",i+5u,i ? /* ÂçáÈôçÊúÄ‰∏äÁ´Ø */ "\345\215\207\351\231\215\346\234\200\344\270\212\347\253\257" : /* ÊóãËΩ¨Êî∂Êã¢Á´Ø */ "\346\227\213\350\275\254\346\224\266\346\213\242\347\253\257",!l->valid ? /* ÈááÊ†∑ÂæÖÁ®≥ÂÆö */ "\351\207\207\346\240\267\345\276\205\347\250\263\345\256\232" : l->stable ? /* Êåâ‰∏ã / Êñ≠Ë∑Ø */ "\346\214\211\344\270\213 / \346\226\255\350\267\257" : /* ÈáäÊîæ */ "\351\207\212\346\224\276"); row(u,i*2u,t);
         snprintf(t,sizeof(t),"PG%u RAW:%u STABLE:%s",i+2u,l->raw,!l->valid ? "--" : l->stable ? "HIGH" : "LOW"); row(u,i*2u+1u,t);
     }
-    row(u,4u,/* 7 …ÏÀı÷·: Œ¥∞≤◊∞œﬁŒª */ "7 \344\274\270\347\274\251\350\275\264: \346\234\252\345\256\211\350\243\205\351\231\220\344\275\215");
+    row(u,4u,/* 7 ‰º∏Áº©ËΩ¥: Êú™ÂÆâË£ÖÈôê‰Ωç */ "7 \344\274\270\347\274\251\350\275\264: \346\234\252\345\256\211\350\243\205\351\231\220\344\275\215");
     if (u->more) {
-        row(u,5u,/* COM Ω”µÿ / NC  ‰»Î…œ¿≠ / ∏ﬂ”––ß */ "COM \346\216\245\345\234\260 / NC \350\276\223\345\205\245\344\270\212\346\213\211 / \351\253\230\346\234\211\346\225\210");
+        row(u,5u,/* COM Êé•Âú∞ / NC ËæìÂÖ•‰∏äÊãâ / È´òÊúâÊïà */ "COM \346\216\245\345\234\260 / NC \350\276\223\345\205\245\344\270\212\346\213\211 / \351\253\230\346\234\211\346\225\210");
         snprintf(t,sizeof(t),"MAX SAMPLE GAP:%lu ms",(unsigned long)m->data.max_sample_gap_ms); row(u,6u,t);
         snprintf(t,sizeof(t),"SAMPLE AGE:%lu ms",(unsigned long)(now-m->last_sample_ms)); row(u,7u,t);
-    } else { row(u,5u,/* ∏ﬂµÁ∆Ω“≤ø…ƒ‹±Ì æΩ”œﬂ∂œø™ */ "\351\253\230\347\224\265\345\271\263\344\271\237\345\217\257\350\203\275\350\241\250\347\244\272\346\216\245\347\272\277\346\226\255\345\274\200"); row(u,6u,/* ‘≠ ºµÁ∆Ω”Îœ˚∂∂Ω·π˚∑÷±œ‘ æ */ "\345\216\237\345\247\213\347\224\265\345\271\263\344\270\216\346\266\210\346\212\226\347\273\223\346\236\234\345\210\206\345\210\253\346\230\276\347\244\272"); }
+    } else { row(u,5u,/* È´òÁîµÂπ≥‰πüÂèØËÉΩË°®Á§∫Êé•Á∫øÊñ≠ÂºÄ */ "\351\253\230\347\224\265\345\271\263\344\271\237\345\217\257\350\203\275\350\241\250\347\244\272\346\216\245\347\272\277\346\226\255\345\274\200"); row(u,6u,/* ÂéüÂßãÁîµÂπ≥‰∏éÊ∂àÊäñÁªìÊûúÂàÜÂà´ÊòæÁ§∫ */ "\345\216\237\345\247\213\347\224\265\345\271\263\344\270\216\346\266\210\346\212\226\347\273\223\346\236\234\345\210\206\345\210\253\346\230\276\347\244\272"); }
 }
 static void servos(QrUi *u)
 {
     static const char * const labels[]={"JAW ON","J 1700","J 2430","JAW OFF",
                                         "TABLE ON","T PREV","T NEXT","TABLE OFF"};
     unsigned i;
+#if defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME
     char t[UI_TEXT_BYTES];
     if (u->servo_ready) {
         for (i=0u;i<2u;++i) {
@@ -279,15 +306,17 @@ static void servos(QrUi *u)
             row(u,i,t);
         }
     } else row(u,0u,"SERVO INIT FAILED / PWM OFF");
+#else
+    row(u,0u,"SERVO NOT AVAILABLE");
+#endif
     for (i=0u;i<8u;++i)
         (void)item(u,4u+(i%4u)*119u,112u+(i/4u)*48u,114u,36u,1u,labels[i]);
-    (void)item(u,8u,196u,464u,24u,0u,u->servo && u->servo->boot_pending ? "WAIT: HOME AXES 6 / 5 / 7" : u->servo_blocked ? "ARM/CHASSIS BUSY" :
+    (void)item(u,8u,196u,464u,24u,0u,u->servo_blocked ? "ARM/CHASSIS BUSY" :
         u->servo && u->servo->last_status==SERVO_REJECT_RANGE ? "LIMIT: TARGET UNCHANGED" :
         u->servo && u->servo->last_status==SERVO_REJECT_STATE ? "TAP THAT SERVO ON FIRST" :
         "TABLE: 1240 / 1900 / 2600 us");
 }
-static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,
-    const GyroSnapshot *g,uint32_t now)
+static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,const GyroSnapshot *g,uint32_t now)
 {
     unsigned i; char t[43]; u->count=0u;
     (void)item(u,8,4,384,32,0,titles[u->page]);
@@ -299,31 +328,50 @@ static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,
     case UI_MECHANISM: mechanism(u,now); break;
     case UI_LIMITS: limits(u,now); break;
     case UI_SERVO: servos(u); break;
-    case UI_RACE:
-        row(u,0u,"FRAMEWORK ONLY / NO EXECUTOR");
-        row(u,1u,"K230 READY / START NOT CONNECTED");
-        if (u->mission) {
-            MissionUi_Line(t,1u,u->mission,now); row(u,2u,t);
-            MissionUi_Line(t,6u,u->mission,now); row(u,3u,t);
-        }
-        (void)item(u,8,196,216,30,1,"START (NOT READY)"); break;
     case UI_VISION:
-        row(u,0u,/* K230: Õ®–≈–≠“È…–Œ¥ µœ÷ */ "K230: \351\200\232\344\277\241\345\215\217\350\256\256\345\260\232\346\234\252\345\256\236\347\216\260"); row(u,1u,"READY / START: NOT IMPLEMENTED");
-        row(u,2u,/* µ±«∞Œﬁ»ŒŒÒΩ◊∂Œ”Î ”æı◊¯±Íªÿ¥´ */ "\345\275\223\345\211\215\346\227\240\344\273\273\345\212\241\351\230\266\346\256\265\344\270\216\350\247\206\350\247\211\345\235\220\346\240\207\345\233\236\344\274\240");
-        if (u->more) { row(u,4u,"USART1 PA9 / PA10 115200 8N1"); row(u,5u,/* ≥Ã–Ú≤ªª·ºŸ±®±»»¸æÕ–˜ */ "\347\250\213\345\272\217\344\270\215\344\274\232\345\201\207\346\212\245\346\257\224\350\265\233\345\260\261\347\273\252"); }
+        if (u->vision) for(i=1u;i<=6u;++i) {
+            VisionUi_Line(t,i,u->vision,u->vision_mode,u->vision_color,u->vision_zone,u->vision_position,now); row(u,i-1u,t);
+        }
+        (void)item(u,8,196,140,30,1,"SCAN"); (void)item(u,160,196,140,30,1,"VISION STOP");
         break;
-    case UI_GYRO:
+    case UI_RACE:
+        if (u->mission) for(i=1u;i<=6u;++i) { MissionUi_Line(t,i==6u ? 7u : i,u->mission,now); row(u,i-1u,t); }
+        (void)item(u,8,196,216,30,1,"START / ZONE 2");
+        (void)item(u,244,196,228,30,1,"QR LEG TEST");
+        break;
+    case UI_DEPARTURE:
+        if (u->departure) for(i=1u;i<=6u;++i) { Departure_Line(t,i,u->departure); row(u,i-1u,t); }
+        (void)item(u,8,196,216,30,1,"START 100cm -> QR");
+        break;
+    case UI_RUN_ONLY:
+        if (u->run_qr_text) { snprintf(t,43,"QR:%s",u->run_qr_text); row(u,0u,t); }
+        else row(u,0u,"NO HOME / NO GYRO / XM1605");
+        for(i=0u;i<4u;++i) {
+            const MotorNode *n=&b->nodes[i];
+            if (MotorBus_Fresh(n,MOTOR_VALID_SPEED,now)) snprintf(t,43,"%u %s %s %ld RPM",i+1u,
+                MotorBus_Role((uint8_t)(i+1u)),node_state(n,now),(long)n->data.speed_rpm);
+            else snprintf(t,43,"%u %s WAIT / STALE",i+1u,MotorBus_Role((uint8_t)(i+1u)));
+            row(u,i+1u,t);
+        }
+        row(u,5u,u->run_note ? u->run_note : "WAIT FOR WHEELS");
+        (void)item(u,8,196,216,30,1,"FWD UNTIL QR");
+        (void)item(u,244,196,228,30,1,"REVERSE / 2s");
+        break;
+    default:
         for (i=1u;i<=(u->more ? 8u : 6u);++i) {
             GyroUi_Line(t,i,u->more,g);
-            row(u,i-1u,(!u->more && i==6u && u->gyro_notice) ? u->gyro_notice : t);
+            row(u,i-1u,t);
         }
         if (!u->more) {
-            (void)item(u,8,196,140,30,1,/* –£◊º */ "\346\240\241\345\207\206"); (void)item(u,160,196,140,30,1,/* Ω«∂»«Â¡„ */ "\350\247\222\345\272\246\346\270\205\351\233\266");
+            if (u->page==UI_GYRO) { (void)item(u,8,196,140,30,1,/* Ê†°ÂáÜ */ "\346\240\241\345\207\206"); (void)item(u,160,196,140,30,1,/* ËßíÂ∫¶Ê∏ÖÈõ∂ */ "\350\247\222\345\272\246\346\270\205\351\233\266"); }
         }
         break;
     }
+    if (u->page==UI_RUN_ONLY) {
+        (void)item(u,8,232,464,32,1,"STOP"); return;
+    }
     for (i=0u;i<5u;++i) {
-        static const char * const labels[]={/*  ◊“≥ */ "\351\246\226\351\241\265",/* µ◊≈Ã */ "\345\272\225\347\233\230",/* ª˙–µ±€ */ "\346\234\272\346\242\260\350\207\202",/* œﬁŒª */ "\351\231\220\344\275\215",/* Õ£÷π */ "\345\201\234\346\255\242"};
+        static const char * const labels[]={/* È¶ñÈ°µ */ "\351\246\226\351\241\265",/* Â∫ïÁõò */ "\345\272\225\347\233\230",/* Êú∫Ê¢∞ËáÇ */ "\346\234\272\346\242\260\350\207\202",/* Èôê‰Ωç */ "\351\231\220\344\275\215",/* ÂÅúÊ≠¢ */ "\345\201\234\346\255\242"};
         (void)item(u,nav_x[i],232,nav_w[i],32,1,labels[i]);
     }
     (void)item(u,400,4,72,32,1,u->more ? "LESS" : "MORE");
@@ -399,8 +447,7 @@ static void draw_step(QrUi *u)
     }
     if (!v->text[u->offset]) { strcpy(u->previous[u->widget],v->text); ++u->widget; u->drawing=DRAW_WIDGET; }
 }
-void QrUi_Process(QrUi *u,const QrService *q,const MotorBus *b,
-    const GyroSnapshot *g,uint32_t now)
+void QrUi_Process(QrUi *u,const QrService *q,const MotorBus *b,const GyroSnapshot *g,uint32_t now)
 {
     if (u->redraw || (!u->drawing && now-u->last_draw>=100u)) {
         if (u->redraw) { memset(u->previous,0,sizeof(u->previous)); u->clear_y=0u; u->drawing=DRAW_CLEAR; }

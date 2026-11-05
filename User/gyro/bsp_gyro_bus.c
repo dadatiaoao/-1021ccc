@@ -11,7 +11,7 @@ static I2C_HandleTypeDef gyro_i2c;
 /* Touch configures I2C2 GPIO itself and uses the HAL weak MSP. Keep that path
  * untouched: initialise ONLY this private I2C1 instance's pins/clock here. */
 /*
- * 只复位/配置本陀螺 I2C1 及引脚；启用 DWT 但不清共享计数器，保留计时连续性。
+ * 只复位/配置本陀螺 I2C1 及引脚；启用 DWT 但不清共享计数器，保留光流计时连续性。
  */
 static GyroBusError init(void *ctx)
 {
@@ -29,7 +29,7 @@ static GyroBusError init(void *ctx)
     gyro_i2c.Init.GeneralCallMode=I2C_GENERALCALL_DISABLE;
     gyro_i2c.Init.NoStretchMode=I2C_NOSTRETCH_DISABLE;
     CoreDebug->DEMCR|=CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CTRL|=DWT_CTRL_CYCCNTENA_Msk; /* Keep the cycle counter continuous across recovery. */
+    DWT->CTRL|=DWT_CTRL_CYCCNTENA_Msk; /* Shared with flow; never reset CYCCNT. */
     return HAL_I2C_Init(&gyro_i2c)==HAL_OK ? GYRO_BUS_OK : GYRO_BUS_IO;
 }
 static GyroBusError result(HAL_StatusTypeDef r)

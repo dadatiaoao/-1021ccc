@@ -59,8 +59,6 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
 #endif
         snprintf(t,43,"CAL:%s %lu/%u",Gyro_CalName(d->calibration),(unsigned long)d->cal_count,GYRO_CAL_SAMPLES); break;
     case 6u:
-        /* Six overview rows fit above the buttons. Put failures in the visible
-           timing row rather than an unreachable seventh row. */
         if (d->state==GYRO_INIT) strcpy(t,"INIT: WAIT SENSOR");
         else if (d->error!=GYRO_OK || d->angle_gap)
             snprintf(t,43,"ERR:%s BUS:%s",Gyro_ErrorName(d->error!=GYRO_OK ? d->error : d->last_fault),bus_name(d->bus_error));

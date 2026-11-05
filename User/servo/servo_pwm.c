@@ -1,23 +1,46 @@
-﻿/* 两路舵机 PWM 驱动。只占用 TIM3 的 CH1/CH3，不开中断，不阻塞。
+﻿/* 两路舵机 PWM 驱动。只占用 TIM3 的 CH1/CH2，不开中断，不阻塞。
  *
  * 时钟：SYSCLK 180MHz → APB1 45MHz → APB1 定时器时钟 90MHz
  *       PSC = 90 - 1  → 计数频率 1MHz
  *       ARR = 20000 - 1 → 20ms 周期 = 50Hz
  *       CCR = 脉宽(us)
  *
+ * 为什么不用 K230 的 PWM：K230 跑 YOLO 时 Python 调度会被阻塞，改占空比的
+ * 时刻不可控，这正是归档脚本里"unexpected delayed motion"的成因。舵机需要
+ * 确定性的时序，归 STM32。
  */
 #include "servo_pwm.h"
 #include "stm32f4xx_hal.h"
 
-#define SERVO_TIM TIM3
-#define SERVO_PSC 89u
-#define SERVO_ARR 19999u
+#if (defined(SERVO_DUAL_BENCH) && SERVO_DUAL_BENCH) || (defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME)
+/* Dual manual test: PA6/TIM3_CH1 and PC8/TIM3_CH3; PA7 is not driven. */
+#define SERVO_GPIO_PORT GPIOA
+#define SERVO_GPIO_PINS GPIO_PIN_6
+#elif defined(SERVO_TURNTABLE_BENCH) && SERVO_TURNTABLE_BENCH
+/* Dedicated test firmware: PC8/TIM3_CH3 only; do not drive PA6 or PA7. */
+#define SERVO_GPIO_PORT GPIOC
+#define SERVO_GPIO_PINS GPIO_PIN_8
+#else
+#define SERVO_GPIO_PORT GPIOA
+#define SERVO_GPIO_PINS (GPIO_PIN_6 | GPIO_PIN_7)
+#endif
+#define SERVO_GPIO_AF   GPIO_AF2_TIM3
+#define SERVO_TIM       TIM3
+#define SERVO_PSC       89u      /* 90MHz / 90 = 1MHz */
+#define SERVO_ARR       19999u   /* 1MHz / 20000 = 50Hz */
+
+#if (defined(SERVO_DUAL_BENCH) && SERVO_DUAL_BENCH) || (defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME)
 static const uint32_t servo_channel[SERVO_CHANNELS] = { TIM_CHANNEL_1, TIM_CHANNEL_3 };
+#elif defined(SERVO_TURNTABLE_BENCH) && SERVO_TURNTABLE_BENCH
+static const uint32_t servo_channel[SERVO_CHANNELS] = { TIM_CHANNEL_3, TIM_CHANNEL_2 };
+#else
+static const uint32_t servo_channel[SERVO_CHANNELS] = { TIM_CHANNEL_1, TIM_CHANNEL_2 };
+#endif
 
 static TIM_HandleTypeDef servo_tim;
 static ServoLimits servo_limits[SERVO_CHANNELS] = {
-    { 1000u, 2000u, 1500u, 300u },   /* 夹爪：保守窗口；线性机构，不按角度用 */
-    { 1000u, 2000u, 1500u, 300u }    /* 转盘：实际预设由 servo_control 配置 */
+    { 1000u, 2000u, 1500u, 300u, 0u },   /* 夹爪：保守窗口；线性机构，不按角度用 */
+    { 1000u, 2000u, 1500u, 300u, 0u }    /* 升降：标定后填 travel_deg=180 才能用角度 */
 };
 static int32_t  servo_current[SERVO_CHANNELS] = { 1500, 1500 };
 static int32_t  servo_target[SERVO_CHANNELS]  = { 1500, 1500 };
@@ -39,15 +62,26 @@ void Servo_Init(void)
     TIM_OC_InitTypeDef oc = {0};
     uint8_t i;
 
-    servo_ready=0u;
+#if (defined(SERVO_DUAL_BENCH) && SERVO_DUAL_BENCH) || (defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
+#elif defined(SERVO_TURNTABLE_BENCH) && SERVO_TURNTABLE_BENCH
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+#else
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+#endif
     __HAL_RCC_TIM3_CLK_ENABLE();
-    gpio.Pin=GPIO_PIN_6;
-    gpio.Mode=GPIO_MODE_AF_PP; gpio.Pull=GPIO_NOPULL;
-    gpio.Speed=GPIO_SPEED_FREQ_HIGH; gpio.Alternate=GPIO_AF2_TIM3;
-    HAL_GPIO_Init(GPIOA,&gpio);
-    gpio.Pin=GPIO_PIN_8; HAL_GPIO_Init(GPIOC,&gpio);
+
+    gpio.Pin = SERVO_GPIO_PINS;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    gpio.Alternate = SERVO_GPIO_AF;
+    HAL_GPIO_Init(SERVO_GPIO_PORT, &gpio);
+#if (defined(SERVO_DUAL_BENCH) && SERVO_DUAL_BENCH) || (defined(SERVO_DUAL_RUNTIME) && SERVO_DUAL_RUNTIME)
+    gpio.Pin = GPIO_PIN_8;
+    HAL_GPIO_Init(GPIOC, &gpio);
+#endif
 
     servo_tim.Instance = SERVO_TIM;
     servo_tim.Init.Prescaler = SERVO_PSC;
@@ -120,6 +154,11 @@ ServoStatus Servo_SetTarget(uint8_t ch, int32_t us)
     return SERVO_OK;
 }
 
+ServoStatus Servo_Jog(uint8_t ch, int32_t delta_us)
+{
+    if (!servo_ready || ch >= SERVO_CHANNELS) return SERVO_REJECT_STATE;
+    return Servo_SetTarget(ch, servo_current[ch] + delta_us);
+}
 
 void Servo_Process(uint32_t now_ms)
 {

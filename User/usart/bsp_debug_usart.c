@@ -1,117 +1,16 @@
-/**
-  ******************************************************************************
-  * @file    bsp_debug_usart.c
-  * @author  fire
-  * @version V1.0
-  * @date    2016-xx-xx
-  * @brief   使用串口1，重定向c库printf函数到usart端口，中断接收模式
-  ******************************************************************************
-  * @attention
-  *
-  * 实验平台:野火 STM32 F429 开发板  
-  * 论坛    :http://www.firebbs.cn
-  * 淘宝    :http://fire-stm32.taobao.com
-  *
-  ******************************************************************************
-  */ 
-  
-#include "./usart/bsp_debug_usart.h"
-#include "./usart/bsp_motor_uart.h"
-#include "./usart/bsp_qr_uart.h"
-
-UART_HandleTypeDef UartHandle;
-extern uint8_t ucTemp;  
-
- /**
-  * @brief  DEBUG_USART GPIO 配置,工作模式配置。115200 8-N-1
-  * @param  无
-  * @retval 无
-  */  
-void DEBUG_USART_Config(void)
-{ 
-  
-  UartHandle.Instance          = DEBUG_USART;
-  
-  UartHandle.Init.BaudRate     = DEBUG_USART_BAUDRATE;
-  UartHandle.Init.WordLength   = UART_WORDLENGTH_8B;
-  UartHandle.Init.StopBits     = UART_STOPBITS_1;
-  UartHandle.Init.Parity       = UART_PARITY_NONE;
-  UartHandle.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
-  UartHandle.Init.Mode         = UART_MODE_TX_RX;
-  
-  HAL_UART_Init(&UartHandle); 
-}
-
-
-/**
-  * @brief UART MSP 初始化 
-  * @param huart: UART handle
-  * @retval 无
-  */
-/*
- * 工程共享 UART MSP 入口：UART5 转交电机、USART3 转交扫码，USART1 保留调试口配置。
- * 各串口仅配置自己的引脚/DMA，HAL 共享回调由 bsp_uart_callbacks.c 统一分发。
- */
-void HAL_UART_MspInit(UART_HandleTypeDef *huart)
-{  
-  GPIO_InitTypeDef  GPIO_InitStruct;
-  if (huart->Instance == UART5) { BspMotorUart_MspInit(huart); return; }
-  if (huart->Instance == USART3) { BspQrUart_MspInit(huart); return; }
-  if (huart->Instance != USART1) return;
-  
-  DEBUG_USART_CLK_ENABLE();
-	
-	DEBUG_USART_RX_GPIO_CLK_ENABLE();
-  DEBUG_USART_TX_GPIO_CLK_ENABLE();
-  
-/**USART1 GPIO Configuration    
-  PA9     ------> USART1_TX
-  PA10    ------> USART1_RX 
-  */
-  /* 配置Tx引脚为复用功能  */
-  GPIO_InitStruct.Pin = DEBUG_USART_TX_PIN;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = DEBUG_USART_TX_AF;
-  HAL_GPIO_Init(DEBUG_USART_TX_GPIO_PORT, &GPIO_InitStruct);
-  
-  /* 配置Rx引脚为复用功能 */
-  GPIO_InitStruct.Pin = DEBUG_USART_RX_PIN;
-  GPIO_InitStruct.Alternate = DEBUG_USART_RX_AF;
-  HAL_GPIO_Init(DEBUG_USART_RX_GPIO_PORT, &GPIO_InitStruct); 
- 
-  HAL_NVIC_SetPriority(DEBUG_USART_IRQ ,0,1);	//抢占优先级0，子优先级1
-  HAL_NVIC_EnableIRQ(DEBUG_USART_IRQ );		    //使能USART1中断通道  
-}
-
-
-/*****************  发送字符串 **********************/
-void Usart_SendString(uint8_t *str)
+/* USART1 belongs exclusively to K230. Legacy debug text is intentionally
+   discarded, including touch-driver startup prints. No semihosting or UART I/O. */
+#include "bsp_debug_usart.h"
+#include "bsp_motor_uart.h"
+#include "bsp_qr_uart.h"
+#include "bsp_vision_uart.h"
+void HAL_UART_MspInit(UART_HandleTypeDef *uart)
 {
-	unsigned int k=0;
-  do 
-  {
-      HAL_UART_Transmit(&UartHandle,(uint8_t *)(str + k) ,1,1000);
-      k++;
-  } while(*(str + k)!='\0');
-  
+    if (uart->Instance==UART5) BspMotorUart_MspInit(uart);
+    else if (uart->Instance==USART3) BspQrUart_MspInit(uart);
+    else if (uart->Instance==USART1) BspVisionUart_MspInit(uart);
 }
-///重定向c库函数printf到串口DEBUG_USART，重定向后可使用printf函数
-int fputc(int ch, FILE *f)
-{
-	/* 发送一个字节数据到串口DEBUG_USART */
-	HAL_UART_Transmit(&UartHandle, (uint8_t *)&ch, 1, 1000);	
-	
-	return (ch);
-}
-
-///重定向c库函数scanf到串口DEBUG_USART，重写向后可使用scanf、getchar等函数
-int fgetc(FILE *f)
-{
-		
-	int ch;
-	HAL_UART_Receive(&UartHandle, (uint8_t *)&ch, 1, 1000);	
-	return (ch);
-}
-/*********************************************END OF FILE**********************/
+void DEBUG_USART_Config(void) { /* Retained for source compatibility; do not reinitialize USART1. */ }
+void Usart_SendString(uint8_t *text) { (void)text; }
+int fputc(int ch,FILE *file) { (void)file; return ch; }
+int fgetc(FILE *file) { (void)file; return EOF; }
