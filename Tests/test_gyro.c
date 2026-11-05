@@ -132,9 +132,61 @@ static void test_cal_failures(void)
     }
     CHECK(s.data.calibration==GYRO_CAL_MOVING && !s.data.angle_valid);
     NEAR(s.data.bias_dps,bias,0.0001);
-    memset(m.raw,0,sizeof(m.raw)); m.raw[0]=262; run(&s,&m,20u);
+    memset(m.raw,0,sizeof(m.raw)); m.raw[(GYRO_AXIS+1)%3]=1703; run(&s,&m,20u);
     CHECK(Gyro_RequestCalibration(&s,m.now,0u)); run(&s,&m,2200u);
-    CHECK(s.data.calibration==GYRO_CAL_MOVING); /* mean 4 >3, still below abs 5 */
+    CHECK(s.data.calibration==GYRO_CAL_MOVING); /* Non-selected axis: 26 dps exceeds the common 25 dps limit. */
+}
+static void test_measured_large_bias(void)
+{
+    GyroService s; GyroMock m; unsigned i,axis; uint32_t at; float bias;
+    setup(&s,&m,0u);
+    m.raw[GYRO_AXIS]=1039; /* ~15.86 dps, not a hard-coded correction. */
+    run(&s,&m,100u);
+    CHECK(!s.data.calibrated && !s.data.rate_valid && !s.data.angle_valid);
+    CHECK(Gyro_RequestCalibration(&s,m.now,0u));
+    /* A quiet but nonconstant window must estimate its mean. */
+    for (i=0u;i<2200u;++i) {
+        m.raw[GYRO_AXIS]=(int16_t)(1039+((m.now/10u)%2u ? 2 : -2));
+        step(&s,&m,m.now+1u,0u);
+    }
+    CHECK(s.data.calibration==GYRO_CAL_DONE && s.data.angle_valid);
+    NEAR(s.data.bias_dps,GYRO_SIGN*1039.0/65.5,0.001);
+    NEAR(s.data.rate_dps,0.0,0.04);
+    /* Recalibration replaces the old offset, including its sign. */
+    m.raw[GYRO_AXIS]=-1179; cal(&s,&m);
+    NEAR(s.data.bias_dps,GYRO_SIGN*-18.0,0.0001);
+    NEAR(s.data.rate_dps,0.0,0.0001); NEAR(s.data.angle_deg,0.0,0.0001);
+    m.raw[GYRO_AXIS]=-1179+655; run(&s,&m,30u);
+    NEAR(s.data.rate_dps,GYRO_SIGN*10.0,0.0001);
+    CHECK(Gyro_ZeroAngle(&s,m.now)); at=s.data.sample_ms;
+    run(&s,&m,1000u);
+    NEAR(s.data.angle_deg,GYRO_SIGN*10.0*(s.data.sample_ms-at)/1000.0,0.001);
+    bias=s.data.bias_dps;
+    /* Large-bias windows retain the original noise and range checks. */
+    CHECK(Gyro_RequestCalibration(&s,m.now,0u));
+    for (i=0u;i<2200u;++i) {
+        m.raw[GYRO_AXIS]=(int16_t)(1039+((m.now/10u)%2u ? 20 : -20));
+        step(&s,&m,m.now+1u,0u);
+    }
+    CHECK(s.data.calibration==GYRO_CAL_MOVING && !s.data.angle_valid);
+    NEAR(s.data.bias_dps,bias,0.0001);
+    m.raw[GYRO_AXIS]=1039; CHECK(Gyro_RequestCalibration(&s,m.now,0u));
+    run(&s,&m,100u); m.raw[GYRO_AXIS]+=100; run(&s,&m,20u);
+    CHECK(s.data.calibration==GYRO_CAL_MOVING);
+    NEAR(s.data.bias_dps,bias,0.0001);
+    /* Every axis accepts both signs just inside 25 dps, including means >20.
+       The next raw count outside 25 must fail without replacing the bias. */
+    for (axis=0u;axis<3u;++axis) for (i=0u;i<2u;++i) {
+        memset(m.raw,0,sizeof(m.raw));
+        m.raw[axis]=(int16_t)(i ? -1637 : 1637); /* ~24.992 dps */
+        cal(&s,&m);
+        NEAR(s.data.bias_dps,axis==GYRO_AXIS ? GYRO_SIGN*(double)m.raw[axis]/65.5 : 0.0,0.0001);
+        bias=s.data.bias_dps;
+        m.raw[axis]=(int16_t)(i ? -1638 : 1638); /* ~25.008 dps */
+        CHECK(Gyro_RequestCalibration(&s,m.now,0u)); run(&s,&m,20u);
+        CHECK(s.data.calibration==GYRO_CAL_MOVING && s.data.cal_count==1u && !s.data.angle_valid);
+        NEAR(s.data.bias_dps,bias,0.0001);
+    }
 }
 static void test_recovery_wrap_ui(void)
 {
@@ -209,7 +261,7 @@ static void test_visible_diagnostics(void)
 }
 int main(void)
 {
-    test_visible_diagnostics(); test_chip(); test_service(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
+    test_visible_diagnostics(); test_chip(); test_service(); test_measured_large_bias(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
     printf("GYRO PASS %u checks, axis %u sign %d, service %u bytes (host ABI)\n",checks,GYRO_AXIS,GYRO_SIGN,(unsigned)sizeof(GyroService));
     return 0;
 }

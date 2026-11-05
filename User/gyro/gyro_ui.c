@@ -51,12 +51,6 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
         if (d->calibrated) decimal(b,d->bias_dps); else strcpy(b,"--");
         snprintf(t,43,"RAW:%.12s BIAS:%.12s",a,b); break;
     case 5u:
-#if GYRO_TEMP_FIXED_BIAS_ENABLED
-        if (d->calibrated && d->calibration==GYRO_CAL_NONE) {
-            decimal(a,d->bias_dps);
-            snprintf(t,43,"BIAS:FIXED %.12s / NO REAL CAL",a); break;
-        }
-#endif
         snprintf(t,43,"CAL:%s %lu/%u",Gyro_CalName(d->calibration),(unsigned long)d->cal_count,GYRO_CAL_SAMPLES); break;
     case 6u:
         /* Six overview rows fit above the buttons. Put failures in the visible

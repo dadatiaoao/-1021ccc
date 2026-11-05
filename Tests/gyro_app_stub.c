@@ -3,6 +3,7 @@
 #include "stm32f4xx_hal.h"
 static GyroMock sensor;
 void GyroTest_Fail(unsigned value) { sensor.failure=value ? GYRO_BUS_NACK : GYRO_BUS_OK; }
+void GyroTest_Raw(unsigned axis,int16_t value) { sensor.raw[axis]=value; }
 static GyroBusError read_app(void *ctx,uint8_t reg,uint8_t *v,size_t n)
 { sensor.now=HAL_GetTick(); return mock_read(ctx,reg,v,n); }
 static GyroBusError write_app(void *ctx,uint8_t reg,uint8_t v)

@@ -5,6 +5,7 @@
 #include "usart/bsp_motor_uart.h"
 #include "motor/motor_test_config.h"
 #include "gyro/gyro_config.h"
+void GyroTest_Raw(unsigned axis,int16_t value);
 #include "lcd/bsp_lcd.h"
 #include "lcd/lcd_orientation.h"
 #include "servo/servo_pwm.h"
@@ -588,10 +589,32 @@ static void render_pages(void)
 static void gyro_ready(QrApp *a)
 {
     advance(a,2500u); press(a,40,248); press(a,200,120); CHECK(a->ui.page==UI_GYRO);
-#if !GYRO_TEMP_FIXED_BIAS_ENABLED
     press(a,40,210); advance(a,2400u);
-#endif
     CHECK(a->gyro.data.angle_valid);
+}
+static void test_gyro_button_calibration(void)
+{
+    QrApp a; uint32_t requests; unsigned commands;
+    CHECK(BspQrUart_Init()); app_fixture(&a,280000u); app_motor.online=MOTOR_ALL;
+    GyroTest_Raw((GYRO_AXIS+1u)%3u,1500); /* Other axes also have large offsets. */
+    GyroTest_Raw((GYRO_AXIS+2u)%3u,-1500);
+    GyroTest_Raw(GYRO_AXIS,1039); advance(&a,2500u);
+    CHECK(!a.gyro.data.calibrated && !a.gyro.data.rate_valid && !a.gyro.data.angle_valid);
+    press(&a,200,120); CHECK(a.ui.page==UI_GYRO);
+    requests=a.gyro.data.cal_requests; commands=app_motor.count;
+    touch_x=479-40; touch_y=271-210; touch_down=1u; advance(&a,100u);
+    CHECK(a.gyro.data.calibration==GYRO_CAL_RUNNING && !a.gyro.data.angle_valid);
+    advance(&a,2300u); /* Holding CAL across completion must not restart it. */
+    CHECK(a.gyro.data.cal_requests==requests+1u && a.gyro.data.calibration==GYRO_CAL_DONE);
+    CHECK(a.gyro.data.bias_dps>15.85f && a.gyro.data.bias_dps<15.87f);
+    CHECK(a.gyro.data.rate_dps==0.0f && a.gyro.data.angle_deg==0.0 && a.gyro.data.angle_valid);
+    touch_down=0u; advance(&a,1u);
+    GyroTest_Raw(GYRO_AXIS,1179); press(&a,40,210); advance(&a,2400u);
+    CHECK(a.gyro.data.cal_requests==requests+2u && a.gyro.data.calibration==GYRO_CAL_DONE);
+    CHECK(a.gyro.data.bias_dps==18.0f && a.gyro.data.rate_dps==0.0f);
+    CHECK(a.gyro.data.angle_deg==0.0 && app_motor.count==commands);
+    CHECK(contains(&a.ui,"CAL:OK") && !contains(&a.ui,"FIXED"));
+    puts("PASS: CAL button measures large bias, hold deduplicates, repeat replaces bias without motor commands");
 }
 static void test_actions(void)
 {
@@ -737,6 +760,7 @@ int main(int argc,char **argv)
     if(argc>1 && !strcmp(argv[1],"timing-servo")) { test_timing(UI_SERVO,0u); return 0; }
     if(argc>1 && !strcmp(argv[1],"timing-home")) { test_timing(UI_HOME,1u); return 0; }
     if(argc>1 && !strcmp(argv[1],"actions")) { test_actions(); return 0; }
+    if(argc>1 && !strcmp(argv[1],"gyro-cal")) { test_gyro_button_calibration(); return 0; }
 #if MECHANISM_TRIAL_RUN
     if(argc>1 && !strcmp(argv[1],"trial-boot")) { test_trial_boot(); return 0; }
 #endif
