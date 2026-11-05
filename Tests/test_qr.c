@@ -596,6 +596,24 @@ static void render_pages(void)
     CHECK(contains(&a.ui,"RECENT:SAMPLE R:2D TIMEOUT"));
     CHECK(contains(&a.ui,"LAST7A:83 SKIP"));
     save_image("ui_gyro_failure_records.pgm");
+    g.probe.mode=2u; g.probe.phase=GYRO_PROBE_POST;
+    g.probe.before.total=g.probe.before.ok=1000u;
+    g.probe.after.total=1000u; g.probe.after.ok=997u; g.probe.after.nack=3u;
+    g.probe.reset_sent=g.probe.bank_seen=1u;
+    g.who=0x47u; g.bus_error=GYRO_BUS_OK;
+    a.ui.redraw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"TEST2 POST ID:47 OK"));
+    CHECK(contains(&a.ui,"PRE:1000/1000 100.00%"));
+    CHECK(contains(&a.ui,"POST:997/1000 99.70%"));
+    CHECK(contains(&a.ui,"RST:OK INIT:OK BANK:00"));
+    save_image("ui_gyro_probe_more.pgm");
+    a.ui.more=0u; a.ui.redraw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"POST N:3 T:0 B:0"));
+    CHECK(!contains(&a.ui,"ZERO REJECT"));
+    save_image("ui_gyro_probe.pgm");
+
     CHECK(!bad_layout); puts("PASS: rendered all 20 page variants, bounds, extreme counts, phase priority and invalid coordinates");
 }
 static void gyro_ready(QrApp *a)

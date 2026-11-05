@@ -8,7 +8,7 @@ New-Item -ItemType Directory -Path $out -Force | Out-Null
 $sources = @('Tests\test_gyro.c','User\gyro\icm42688.c','User\gyro\gyro_service.c','User\gyro\gyro_ui.c') | ForEach-Object { '"' + (Join-Path $projectRoot $_) + '"' }
 # Host tests verify the real CAL path; compile out the temporary fixed-bias
 # hardware workaround in User/gyro/gyro_config.h (see its comment block).
-$base = 'call "' + $vcvars + '" >nul && cd /d "' + $out + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /I"' + (Join-Path $projectRoot 'User') + '" '
+$base = 'call "' + $vcvars + '" >nul && cd /d "' + $out + '" && cl /nologo /W4 /WX /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_COMM_TEST=0 /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /I"' + (Join-Path $projectRoot 'User') + '" '
 foreach ($mapping in @('', '/DGYRO_AXIS=0 /DGYRO_SIGN=-1', '/DGYRO_AXIS=1 /DGYRO_SIGN=1')) {
     $command = $base + $mapping + ' ' + ($sources -join ' ') + ' /Fe:gyro_tests.exe && gyro_tests.exe'
     & $env:ComSpec /d /s /c $command
@@ -19,4 +19,13 @@ foreach ($address in @('0x68','0x69')) {
     $command = $base + '/DGYRO_ADDRESS_7BIT=' + $address + ' /I"' + (Join-Path $projectRoot 'Tests\gyro_stubs') + '" ' + ($busSources -join ' ') + ' /Fe:gyro_bus_tests.exe && gyro_bus_tests.exe'
     & $env:ComSpec /d /s /c $command
     if ($LASTEXITCODE -ne 0) { throw 'Gyro I2C1 BSP tests failed' }
+}
+
+# Isolated WHO_AM_I / single-reset experiment, separate from normal CAL tests.
+$probeSources = @('Tests\test_gyro_probe.c','User\gyro\icm42688.c','User\gyro\gyro_service.c','User\gyro\gyro_ui.c') | ForEach-Object { '"' + (Join-Path $projectRoot $_) + '"' }
+foreach ($mode in @('1','2')) {
+    $probeBase = $base.Replace('/DGYRO_COMM_TEST=0','/DGYRO_COMM_TEST=' + $mode)
+    $command = $probeBase + ($probeSources -join ' ') + ' /Fe:gyro_probe_tests.exe && gyro_probe_tests.exe'
+    & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) { throw 'Gyro communication experiment tests failed' }
 }

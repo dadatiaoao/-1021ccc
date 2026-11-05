@@ -20,7 +20,7 @@ $qrSources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'User\mechani
 $qrArgs = ($qrSources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 # Existing gyro calibration tests use the normal calibration mode.
 # A separate fixed-bias build below covers the shipped application configuration.
-$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /execution-charset:utf-8 /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /DMECHANISM_TRIAL_RUN=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe timing && qr_tests.exe timing-servo && qr_tests.exe timing-home && qr_tests.exe actions'
+$qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /execution-charset:utf-8 /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_COMM_TEST=0 /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /DMECHANISM_TRIAL_RUN=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe timing && qr_tests.exe timing-servo && qr_tests.exe timing-home && qr_tests.exe actions'
 & $env:ComSpec /d /s /c $qrCommand
 if ($LASTEXITCODE -ne 0) { throw 'QR host tests failed' }
 $busSources = @('Tests\test_motor_bus.c', 'User\motor\emm_protocol.c', 'User\motor\motor_bus.c') | ForEach-Object { Join-Path $projectRoot $_ }

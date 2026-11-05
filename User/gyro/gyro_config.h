@@ -1,5 +1,16 @@
 #ifndef GYRO_CONFIG_H
 #define GYRO_CONFIG_H
+/* Temporary communication experiment: 0=normal, 1=WHO_AM_I only,
+ * 2=1000 flawless reads, bank-0 check, ONE reset, then WHO_AM_I only.
+ * No automatic bus reinitialization or configuration writes in this test. */
+#ifndef GYRO_COMM_TEST
+#define GYRO_COMM_TEST 2
+#endif
+#if GYRO_COMM_TEST < 0 || GYRO_COMM_TEST > 2
+#error Invalid GYRO_COMM_TEST mode
+#endif
+#define GYRO_COMM_TEST_READS 1000u
+#define GYRO_COMM_TEST_PERIOD_MS 10u
 /* WDS601M CHIP side only: PS open, CS=3V3, SA0=GND. I2C1 PB6/PB7. */
 #ifndef GYRO_ADDRESS_7BIT
 #define GYRO_ADDRESS_7BIT 0x68u

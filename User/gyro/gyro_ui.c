@@ -21,6 +21,42 @@ static const char *bus_name(GyroBusError e)
         "SCL_LOW","SDA_LOW","BOTH_LOW","HW_BUSY"};
     return (unsigned)e<sizeof(names)/sizeof(names[0]) ? names[e] : "UNKNOWN";
 }
+static void probe_counts(char t[43],const char *label,const GyroProbeCounts *c)
+{
+    unsigned rate=c->total ? (unsigned)(((uint64_t)c->ok*10000u)/c->total) : 0u;
+    if (!c->total) { snprintf(t,43,"%s:0/0 --",label); return; }
+    snprintf(t,43,"%s:%lu/%lu %u.%02u%%",label,(unsigned long)c->ok,
+        (unsigned long)c->total,rate/100u,rate%100u);
+}
+static void probe_line(char t[43],unsigned row,const GyroSnapshot *d)
+{
+    const GyroProbe *p=&d->probe;
+    const GyroProbeCounts *c;
+    static const char * const phases[]={"PRE","BANK","RESET","POST","HOLD"};
+    char bank[12];
+    if (!row) { strcpy(t,"GYRO communication test"); return; }
+    switch (row) {
+    case 1u: snprintf(t,43,"TEST%u %s ID:%02X %s",(unsigned)p->mode,
+        p->phase<=GYRO_PROBE_HOLD ? phases[p->phase] : "?",(unsigned)d->who,
+        bus_name(d->bus_error)); break;
+    case 2u: probe_counts(t,"PRE",&p->before); break;
+    case 3u: probe_counts(t,"POST",&p->after); break;
+    case 4u:
+        if (p->bank_seen) snprintf(bank,sizeof(bank),"%02X",(unsigned)p->bank);
+        else snprintf(bank,sizeof(bank),"%s",p->bank_bus ? bus_name(p->bank_bus) : "--");
+        snprintf(t,43,"RST:%s INIT:%s BANK:%s",p->reset_sent ? bus_name(p->reset_bus) : "--",
+            bus_name(p->init_bus),bank); break;
+    case 5u: case 6u:
+        c=row==5u ? &p->before : &p->after;
+        snprintf(t,43,"%s N:%lu T:%lu B:%lu",row==5u ? "PRE" : "POST",
+            (unsigned long)c->nack,(unsigned long)c->timeout,(unsigned long)c->busy); break;
+    case 7u: case 8u:
+        c=row==7u ? &p->before : &p->after;
+        snprintf(t,43,"%s BADID:%lu OTHER:%lu",row==7u ? "PRE" : "POST",
+            (unsigned long)c->bad_id,(unsigned long)c->other); break;
+    default: break;
+    }
+}
 /* Compact records fit the existing eight-row MORE page. No new touch target. */
 static void failure_line(char t[43],const char *label,const GyroBusFailure *f)
 {
@@ -44,6 +80,7 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
 {
     char a[20],b[20]; t[0]='\0';
     if (!d) { if (!row) strcpy(t,"GYRO unavailable"); return; }
+    if (d->probe.mode) { probe_line(t,row,d); return; }
     if (!row) { strcpy(t,detail ? "GYRO diagnostics" : "GYRO relative rotation"); return; }
     if (detail) {
         switch (row) {

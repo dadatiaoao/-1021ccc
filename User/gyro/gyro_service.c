@@ -100,7 +100,51 @@ void Gyro_Init(GyroService *s,GyroIo io,uint32_t now)
 {
     memset(s,0,sizeof(*s)); s->io=io;
     s->data.axis=GYRO_AXIS; s->data.sign=GYRO_SIGN;
+    if (GYRO_COMM_TEST) {
+        s->data.probe.mode=GYRO_COMM_TEST;
+        s->data.probe.init_bus=s->io.init(s->io.ctx);
+        s->data.bus_error=s->data.probe.init_bus;
+        s->data.state=GYRO_INIT; s->due=now+3u;
+        return;
+    }
     s->retry_ms=GYRO_RETRY_MIN_MS; start(s,now);
+}
+/* A controlled experiment, deliberately separate from fault()/start():
+ * no recovery, backoff, bank writes, calibration or normal initialization.
+ * Each call performs at most ONE bounded bus transaction. */
+static void probe_process(GyroService *s,uint32_t now)
+{
+    GyroProbe *p=&s->data.probe; GyroProbeCounts *c;
+    GyroBusError e; uint8_t v=0u;
+    if (p->init_bus!=GYRO_BUS_OK || (int32_t)(now-s->due)<0) return;
+    if (p->phase==GYRO_PROBE_BANK) {
+        e=s->io.read(s->io.ctx,0x76u,&v,1u);
+        p->bank_bus=e;
+        s->data.bus_error=e; p->bank_seen=(uint8_t)(e==GYRO_BUS_OK); p->bank=v;
+        p->phase=(e==GYRO_BUS_OK && v==0u) ? GYRO_PROBE_RESET : GYRO_PROBE_HOLD;
+    } else if (p->phase==GYRO_PROBE_RESET) {
+        p->reset_sent=1u;
+        p->reset_bus=s->io.write(s->io.ctx,0x11u,1u);
+        s->data.bus_error=p->reset_bus;
+        /* Even NACK/TIMEOUT can leave the write outcome uncertain: NEVER retry.
+         * POST means after the attempt, not proof that a reset completed. */
+        p->phase=GYRO_PROBE_POST;
+        s->due=s->io.millis(s->io.ctx)+2u;
+        return;
+    } else {
+        c=p->phase==GYRO_PROBE_POST ? &p->after : &p->before;
+        if (c->total==UINT32_MAX) return; /* Preserve consistent counters. */
+        e=s->io.read(s->io.ctx,0x75u,&v,1u); ++c->total;
+        s->data.bus_error=e; s->data.who=e==GYRO_BUS_OK ? v : 0u;
+        if (e==GYRO_BUS_OK) { if (v==0x47u) ++c->ok; else ++c->bad_id; }
+        else if (e==GYRO_BUS_NACK) ++c->nack;
+        else if (e==GYRO_BUS_TIMEOUT) ++c->timeout;
+        else if (e==GYRO_BUS_BUSY || (e>=GYRO_BUS_SCL_LOW && e<=GYRO_BUS_HW_BUSY)) ++c->busy;
+        else ++c->other;
+        if (p->mode==2u && p->phase==GYRO_PROBE_PRE && c->total==GYRO_COMM_TEST_READS)
+            p->phase=c->ok==c->total ? GYRO_PROBE_BANK : GYRO_PROBE_HOLD;
+    }
+    s->due=s->io.millis(s->io.ctx)+GYRO_COMM_TEST_PERIOD_MS;
 }
 static int fresh(const GyroService *s,uint32_t now)
 {
@@ -113,6 +157,7 @@ static int fresh(const GyroService *s,uint32_t now)
  */
 int Gyro_RequestCalibration(GyroService *s,uint32_t now,uint8_t motor_active)
 {
+    if (s->data.probe.mode) return 0;
     if (s->data.calibration==GYRO_CAL_RUNNING) return 0;
     ++s->data.cal_requests;
     if (motor_active) { s->data.calibration=motor_rejection(motor_active); return 0; }
@@ -129,6 +174,7 @@ int Gyro_RequestCalibration(GyroService *s,uint32_t now,uint8_t motor_active)
  */
 int Gyro_ZeroAngle(GyroService *s,uint32_t now)
 {
+    if (s->data.probe.mode) return 0;
     if (!fresh(s,now) || !s->data.calibrated || s->data.calibration==GYRO_CAL_RUNNING) return 0;
     /* Boundary is latest acquired sample, not touch/UI refresh time. */
     s->data.angle_deg=0.0; s->data.angle_valid=1u; s->data.angle_gap=0u;
@@ -249,7 +295,8 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
 void Gyro_Process(GyroService *s,uint32_t now,uint8_t motor_active)
 {
     uint32_t began=s->io.cycles(s->io.ctx),cost;
-    process(s,now,motor_active);
+    if (s->data.probe.mode) probe_process(s,now);
+    else process(s,now,motor_active);
     cost=(uint32_t)(s->io.cycles(s->io.ctx)-began)/s->io.cycles_per_us;
     if (cost>s->data.max_process_us) s->data.max_process_us=cost;
 }
@@ -267,6 +314,7 @@ void Gyro_GetSnapshot(const GyroService *s,uint32_t now,GyroSnapshot *out)
 }
 const char *Gyro_StateName(const GyroSnapshot *d)
 {
+    if (d->probe.mode) return "COMM TEST";
     if (d->state==GYRO_INIT) return "INIT";
     if (d->state==GYRO_ERROR) return d->error==GYRO_ID ? "NOT FOUND" : "ERROR";
     if (d->calibration==GYRO_CAL_RUNNING) return "CALIBRATING";

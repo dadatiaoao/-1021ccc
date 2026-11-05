@@ -13,9 +13,20 @@ typedef enum { GYRO_CAL_NONE, GYRO_CAL_RUNNING, GYRO_CAL_DONE,
     GYRO_CAL_MOVING, GYRO_CAL_TIMEOUT, GYRO_CAL_ERROR, GYRO_CAL_MOTOR,
     GYRO_CAL_GAP, GYRO_CAL_NOT_READY, GYRO_CAL_UNKNOWN, GYRO_CAL_STOP } GyroCalibration;
 enum { GYRO_MOTOR_NONE, GYRO_MOTOR_ACTIVE, GYRO_MOTOR_UNKNOWN, GYRO_MOTOR_STOP };
+enum { GYRO_PROBE_PRE, GYRO_PROBE_BANK, GYRO_PROBE_RESET, GYRO_PROBE_POST,
+    GYRO_PROBE_HOLD };
+typedef struct {
+    uint32_t total, ok, nack, timeout, busy, other, bad_id;
+} GyroProbeCounts;
+typedef struct {
+    GyroProbeCounts before, after;
+    GyroBusError init_bus, reset_bus, bank_bus;
+    uint8_t mode, phase, reset_sent, bank_seen, bank;
+} GyroProbe;
 typedef struct {
     GyroState state; GyroError error, last_fault; GyroBusError bus_error, last_bus_error;
     GyroCalibration calibration;
+    GyroProbe probe;
     GyroBusFailure first_bus_failure, last_bus_failure;
     uint8_t config4_seen, config4_before; /* Latest successful pre-read, across retries. */
     int16_t raw[3];

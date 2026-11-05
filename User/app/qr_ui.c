@@ -315,9 +315,9 @@ static void snapshot(QrUi *u,const QrService *q,const MotorBus *b,
     case UI_GYRO:
         for (i=1u;i<=(u->more ? 8u : 6u);++i) {
             GyroUi_Line(t,i,u->more,g);
-            row(u,i-1u,(!u->more && i==6u && u->gyro_notice) ? u->gyro_notice : t);
+            row(u,i-1u,(!u->more && i==6u && u->gyro_notice && (!g || !g->probe.mode)) ? u->gyro_notice : t);
         }
-        if (!u->more) {
+        if (!u->more && (!g || !g->probe.mode)) {
             (void)item(u,8,196,140,30,1,/* 校准 */ "\346\240\241\345\207\206"); (void)item(u,160,196,140,30,1,/* 角度清零 */ "\350\247\222\345\272\246\346\270\205\351\233\266");
         }
         break;
