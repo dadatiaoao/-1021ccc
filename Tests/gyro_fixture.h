@@ -10,6 +10,8 @@ typedef struct {
     int corrupt_reg, fail_reg;
     GyroBusError failure, init_failure;
     int16_t raw[3];
+    uint8_t pins, released_pins;
+    unsigned releases, line_reads;
 } GyroMock;
 static void GyroMock_Reset(GyroMock *m,uint32_t now)
 { memset(m,0,sizeof(*m)); m->id=0x47u; m->now=now; m->corrupt_reg=m->fail_reg=-1; }
@@ -60,8 +62,11 @@ static GyroBusError mock_write(void *ctx,uint8_t reg,uint8_t value)
     }
     return GYRO_BUS_OK;
 }
+static uint8_t mock_lines(void *ctx)
+{ GyroMock *m=ctx; ++m->line_reads; return m->releases ? m->released_pins : m->pins; }
+static void mock_release(void *ctx) { ++((GyroMock *)ctx)->releases; }
 static GyroIo GyroMock_Io(GyroMock *m)
 {
-    GyroIo io={m,mock_init,mock_read,mock_write,mock_ms,mock_cycles,1u}; return io;
+    GyroIo io={m,mock_init,mock_read,mock_write,mock_ms,mock_cycles,1u,mock_lines,mock_release}; return io;
 }
 #endif

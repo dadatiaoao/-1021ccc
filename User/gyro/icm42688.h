@@ -14,6 +14,10 @@ typedef struct {
     uint32_t (*millis)(void *ctx);
     uint32_t (*cycles)(void *ctx);
     uint32_t cycles_per_us;
+    /* Passive diagnostics: bit0=SCL high, bit1=SDA high, bit2=HW BUSY.
+     * release_lines disconnects the controller; it must not send bus clocks. */
+    uint8_t (*lines)(void *ctx);
+    void (*release_lines)(void *ctx);
 } GyroIo;
 enum { GYRO_TRACE_BUS_INIT, GYRO_TRACE_INIT, GYRO_TRACE_SAMPLE, GYRO_TRACE_CHECK };
 typedef struct {

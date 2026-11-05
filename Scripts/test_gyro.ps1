@@ -23,7 +23,7 @@ foreach ($address in @('0x68','0x69')) {
 
 # Isolated WHO_AM_I / single-reset experiment, separate from normal CAL tests.
 $probeSources = @('Tests\test_gyro_probe.c','User\gyro\icm42688.c','User\gyro\gyro_service.c','User\gyro\gyro_ui.c') | ForEach-Object { '"' + (Join-Path $projectRoot $_) + '"' }
-foreach ($mode in @('1','2')) {
+foreach ($mode in @('1','2','3')) {
     $probeBase = $base.Replace('/DGYRO_COMM_TEST=0','/DGYRO_COMM_TEST=' + $mode)
     $command = $probeBase + ($probeSources -join ' ') + ' /Fe:gyro_probe_tests.exe && gyro_probe_tests.exe'
     & $env:ComSpec /d /s /c $command

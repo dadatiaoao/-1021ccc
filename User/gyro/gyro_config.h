@@ -2,11 +2,12 @@
 #define GYRO_CONFIG_H
 /* Temporary communication experiment: 0=normal, 1=WHO_AM_I only,
  * 2=1000 flawless reads, bank-0 check, ONE reset, then WHO_AM_I only.
+ * 3=WHO_AM_I until first bus error, release host pins and observe levels.
  * No automatic bus reinitialization or configuration writes in this test. */
 #ifndef GYRO_COMM_TEST
-#define GYRO_COMM_TEST 2
+#define GYRO_COMM_TEST 3
 #endif
-#if GYRO_COMM_TEST < 0 || GYRO_COMM_TEST > 2
+#if GYRO_COMM_TEST < 0 || GYRO_COMM_TEST > 3
 #error Invalid GYRO_COMM_TEST mode
 #endif
 #define GYRO_COMM_TEST_READS 1000u

@@ -26,9 +26,50 @@ static void baseline(GyroService *s,GyroMock *m)
     CHECK(s->data.probe.before.total==GYRO_COMM_TEST_READS);
     CHECK(!m->writes);
 }
+static void test_release(void)
+{
+    GyroService s; GyroMock m; GyroSnapshot d; char line[43];
+    unsigned e,pins,tx,i,reads; GyroIo io;
+    setup(&s,&m,0u);
+    for (i=0u;i<1100u;++i) tick(&s,&m);
+    CHECK(!m.writes && !m.releases && s.data.probe.before.ok==1100u);
+    m.id=0x42u; tick(&s,&m);
+    CHECK(!m.releases && s.data.probe.before.bad_id==1u);
+    for (e=GYRO_BUS_NACK;e<=GYRO_BUS_HW_BUSY;++e) for (pins=0u;pins<4u;++pins) {
+        setup(&s,&m,UINT32_MAX-8u);
+        tick(&s,&m); CHECK(s.data.probe.before.ok==1u);
+        m.pins=4u; m.released_pins=(uint8_t)pins; m.failure=(GyroBusError)e;
+        tick(&s,&m);
+        CHECK(s.data.probe.phase==GYRO_PROBE_RELEASE_WAIT && m.releases==1u && !m.writes);
+        CHECK(s.data.probe.lines_before==4u && s.data.probe.release_cause==(GyroBusError)e);
+        tx=m.transactions; reads=m.line_reads;
+        step(&s,&m,m.now+9u); CHECK(m.line_reads==reads && !s.data.probe.after_valid);
+        tick(&s,&m);
+        CHECK(s.data.probe.after_valid && s.data.probe.lines_after==pins);
+        CHECK(s.data.probe.phase==GYRO_PROBE_RELEASED && s.data.probe.before.total==2u);
+        m.released_pins=(uint8_t)(pins^3u);
+        for (i=0u;i<10u;++i) tick(&s,&m);
+        CHECK(s.data.probe.lines_after==pins && s.data.probe.lines_now==(pins^3u));
+        CHECK(m.transactions==tx && m.releases==1u && !m.writes && m.initializations==1u);
+        Gyro_GetSnapshot(&s,m.now,&d);
+        CHECK(!d.raw_valid && !d.rate_valid && !d.angle_valid);
+        GyroUi_Line(line,1u,1u,&d); CHECK(strstr(line,"PINS RELEASED"));
+        GyroUi_Line(line,4u,1u,&d); CHECK(strstr(line,"BEFORE SCL:0 SDA:0 BUSY:1"));
+        CHECK(!Gyro_RequestCalibration(&s,m.now,0u) && !Gyro_ZeroAngle(&s,m.now));
+    }
+    GyroMock_Reset(&m,0u); io=GyroMock_Io(&m); io.release_lines=0;
+    Gyro_Init(&s,io,0u); m.failure=GYRO_BUS_TIMEOUT; tick(&s,&m);
+    CHECK(s.data.probe.phase==GYRO_PROBE_UNSUPPORTED && !m.releases);
+    tx=m.transactions; step(&s,&m,m.now+1000u); CHECK(m.transactions==tx);
+    GyroMock_Reset(&m,0u); m.init_failure=GYRO_BUS_IO; Gyro_Init(&s,GyroMock_Io(&m),0u);
+    step(&s,&m,10000u); CHECK(!m.transactions && !m.releases);
+    setup(&s,&m,0u); CHECK(!s.data.probe.after_valid && !s.data.probe.before.total);
+    puts("Gyro release test mode 3 passed");
+}
 int main(void)
 {
     GyroService s; GyroMock m; GyroSnapshot d; char line[43]; unsigned i;
+    if (GYRO_COMM_TEST==3) { test_release(); return 0; }
     setup(&s,&m,UINT32_MAX-15u); baseline(&s,&m);
     CHECK(s.data.probe.before.ok==GYRO_COMM_TEST_READS);
     CHECK(!Gyro_RequestCalibration(&s,m.now,0u) && !Gyro_ZeroAngle(&s,m.now));

@@ -117,6 +117,14 @@ static void probe_process(GyroService *s,uint32_t now)
     GyroProbe *p=&s->data.probe; GyroProbeCounts *c;
     GyroBusError e; uint8_t v=0u;
     if (p->init_bus!=GYRO_BUS_OK || (int32_t)(now-s->due)<0) return;
+    if (p->phase==GYRO_PROBE_UNSUPPORTED) return;
+    if (p->phase==GYRO_PROBE_RELEASE_WAIT || p->phase==GYRO_PROBE_RELEASED) {
+        p->lines_now=s->io.lines(s->io.ctx);
+        if (!p->after_valid) { p->lines_after=p->lines_now; p->after_valid=1u; }
+        p->phase=GYRO_PROBE_RELEASED;
+        s->due=now+100u;
+        return;
+    }
     if (p->phase==GYRO_PROBE_BANK) {
         e=s->io.read(s->io.ctx,0x76u,&v,1u);
         p->bank_bus=e;
@@ -141,6 +149,15 @@ static void probe_process(GyroService *s,uint32_t now)
         else if (e==GYRO_BUS_TIMEOUT) ++c->timeout;
         else if (e==GYRO_BUS_BUSY || (e>=GYRO_BUS_SCL_LOW && e<=GYRO_BUS_HW_BUSY)) ++c->busy;
         else ++c->other;
+        if (p->mode==3u && e!=GYRO_BUS_OK) {
+            p->release_cause=e;
+            if (!s->io.lines || !s->io.release_lines) { p->phase=GYRO_PROBE_UNSUPPORTED; return; }
+            p->lines_before=s->io.lines(s->io.ctx);
+            s->io.release_lines(s->io.ctx);
+            p->phase=GYRO_PROBE_RELEASE_WAIT;
+            s->due=s->io.millis(s->io.ctx)+10u;
+            return;
+        }
         if (p->mode==2u && p->phase==GYRO_PROBE_PRE && c->total==GYRO_COMM_TEST_READS)
             p->phase=c->ok==c->total ? GYRO_PROBE_BANK : GYRO_PROBE_HOLD;
     }

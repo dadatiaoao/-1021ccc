@@ -21,6 +21,7 @@ extern uint32_t SystemCoreClock;
 #define GPIO_PIN_6 0x40u
 #define GPIO_PIN_7 0x80u
 #define GPIO_MODE_AF_OD 4u
+#define GPIO_MODE_INPUT 0u
 #define GPIO_NOPULL 0u
 #define GPIO_SPEED_FREQ_HIGH 3u
 #define GPIO_AF4_I2C1 4u
@@ -39,6 +40,8 @@ void TestGyroClock(unsigned n);
 #define __HAL_RCC_I2C1_FORCE_RESET() TestGyroClock(2u)
 #define __HAL_RCC_I2C1_RELEASE_RESET() TestGyroClock(3u)
 unsigned TestGyroFlag(I2C_HandleTypeDef *h,unsigned flag);
+void TestGyroDisable(I2C_HandleTypeDef *h);
+#define __HAL_I2C_DISABLE(h) TestGyroDisable(h)
 #define __HAL_I2C_GET_FLAG(h,f) TestGyroFlag(h,f)
 void HAL_GPIO_Init(void *port,GPIO_InitTypeDef *g);
 GPIO_PinState HAL_GPIO_ReadPin(void *port,uint16_t pin);

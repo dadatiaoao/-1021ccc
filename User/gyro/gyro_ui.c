@@ -35,6 +35,30 @@ static void probe_line(char t[43],unsigned row,const GyroSnapshot *d)
     static const char * const phases[]={"PRE","BANK","RESET","POST","HOLD"};
     char bank[12];
     if (!row) { strcpy(t,"GYRO communication test"); return; }
+    if (p->mode==3u) {
+        switch (row) {
+        case 1u: snprintf(t,43,"TEST3 %s",p->phase==GYRO_PROBE_RELEASE_WAIT ? "RELEASE WAIT" :
+            p->phase==GYRO_PROBE_RELEASED ? "PINS RELEASED" :
+            p->phase==GYRO_PROBE_UNSUPPORTED ? "UNSUPPORTED" : "READ ONLY"); break;
+        case 2u: probe_counts(t,"READ",&p->before); break;
+        case 3u: snprintf(t,43,"FAULT:%s INIT:%s",bus_name(p->release_cause),bus_name(p->init_bus)); break;
+        case 4u:
+            if (p->phase==GYRO_PROBE_RELEASE_WAIT || p->phase==GYRO_PROBE_RELEASED)
+                snprintf(t,43,"BEFORE SCL:%u SDA:%u BUSY:%u",p->lines_before&1u,
+                    (p->lines_before>>1)&1u,(p->lines_before>>2)&1u);
+            else strcpy(t,"BEFORE:--"); break;
+        case 5u:
+            if (p->after_valid) snprintf(t,43,"AFTER10 SCL:%u SDA:%u",p->lines_after&1u,(p->lines_after>>1)&1u);
+            else strcpy(t,"AFTER10:--"); break;
+        case 6u:
+            if (p->after_valid) snprintf(t,43,"NOW SCL:%u SDA:%u",p->lines_now&1u,(p->lines_now>>1)&1u);
+            else strcpy(t,"NOW:--"); break;
+        case 7u: snprintf(t,43,"ID:%02X BADID:%lu",(unsigned)d->who,(unsigned long)p->before.bad_id); break;
+        case 8u: strcpy(t,p->after_valid ? "INPUT / NO PULL / NO RETRY" : "WAIT FIRST BUS ERROR"); break;
+        default: break;
+        }
+        return;
+    }
     switch (row) {
     case 1u: snprintf(t,43,"TEST%u %s ID:%02X %s",(unsigned)p->mode,
         p->phase<=GYRO_PROBE_HOLD ? phases[p->phase] : "?",(unsigned)d->who,

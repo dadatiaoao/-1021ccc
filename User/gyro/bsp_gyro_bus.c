@@ -8,6 +8,7 @@
 #include "stm32f4xx_hal.h"
 #include <string.h>
 static I2C_HandleTypeDef gyro_i2c;
+static uint8_t lines_released;
 /* Touch configures I2C2 GPIO itself and uses the HAL weak MSP. Keep that path
  * untouched: initialise ONLY this private I2C1 instance's pins/clock here. */
 /*
@@ -16,6 +17,7 @@ static I2C_HandleTypeDef gyro_i2c;
 static GyroBusError init(void *ctx)
 {
     GPIO_InitTypeDef g; (void)ctx;
+    lines_released=0u;
     __HAL_RCC_GPIOB_CLK_ENABLE(); __HAL_RCC_I2C1_CLK_ENABLE();
     __HAL_RCC_I2C1_FORCE_RESET(); __HAL_RCC_I2C1_RELEASE_RESET();
     memset(&g,0,sizeof(g)); g.Pin=GPIO_PIN_6|GPIO_PIN_7;
@@ -73,6 +75,7 @@ static GyroBusError preflight(void)
 static GyroBusError read_reg(void *ctx,uint8_t reg,uint8_t *v,size_t n)
 {
     GyroBusError e; (void)ctx;
+    if (lines_released) return GYRO_BUS_IO;
     if (n==0u || n>6u || !v) return GYRO_BUS_IO;
     e=preflight(); if (e!=GYRO_BUS_OK) return e;
     return result(HAL_I2C_Mem_Read(&gyro_i2c,(uint16_t)(GYRO_ADDRESS_7BIT<<1),reg,
@@ -84,17 +87,37 @@ static GyroBusError read_reg(void *ctx,uint8_t reg,uint8_t *v,size_t n)
 static GyroBusError write_reg(void *ctx,uint8_t reg,uint8_t v)
 {
     GyroBusError e; (void)ctx;
+    if (lines_released) return GYRO_BUS_IO;
     e=preflight(); if (e!=GYRO_BUS_OK) return e;
     return result(HAL_I2C_Mem_Write(&gyro_i2c,(uint16_t)(GYRO_ADDRESS_7BIT<<1),reg,
         I2C_MEMADD_SIZE_8BIT,&v,1u,GYRO_BUS_TIMEOUT_MS));
 }
 static uint32_t millis(void *ctx) { (void)ctx; return HAL_GetTick(); }
 static uint32_t cycles(void *ctx) { (void)ctx; return DWT->CYCCNT; }
+static uint8_t lines(void *ctx)
+{
+    uint8_t v=0u; (void)ctx;
+    if (HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_6)==GPIO_PIN_SET) v|=1u;
+    if (HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_7)==GPIO_PIN_SET) v|=2u;
+    if (!lines_released && __HAL_I2C_GET_FLAG(&gyro_i2c,I2C_FLAG_BUSY)) v|=4u;
+    return v;
+}
+static void release_lines(void *ctx)
+{
+    GPIO_InitTypeDef g; (void)ctx;
+    /* No STOP request, pulse train or recovery. Disconnect the I2C outputs
+       from PB6/PB7 even if clearing PE alone does not release a busy transfer. */
+    __HAL_I2C_DISABLE(&gyro_i2c);
+    memset(&g,0,sizeof(g)); g.Pin=GPIO_PIN_6|GPIO_PIN_7;
+    g.Mode=GPIO_MODE_INPUT; g.Pull=GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOB,&g);
+    lines_released=1u;
+}
 /*
  * 将专用 I2C、毫秒时钟和周期计数封装为 GyroIo，供器件驱动与服务共同使用。
  */
 GyroIo BspGyroBus_Io(void)
 {
-    GyroIo io={0,init,read_reg,write_reg,millis,cycles,0u};
+    GyroIo io={0,init,read_reg,write_reg,millis,cycles,0u,lines,release_lines};
     io.cycles_per_us=SystemCoreClock/1000000u; return io;
 }

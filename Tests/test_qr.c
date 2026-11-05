@@ -613,6 +613,18 @@ static void render_pages(void)
     CHECK(contains(&a.ui,"POST N:3 T:0 B:0"));
     CHECK(!contains(&a.ui,"ZERO REJECT"));
     save_image("ui_gyro_probe.pgm");
+    g.probe.mode=3u; g.probe.phase=GYRO_PROBE_RELEASED;
+    g.probe.release_cause=GYRO_BUS_BOTH_LOW;
+    g.probe.lines_before=4u; g.probe.lines_after=g.probe.lines_now=3u;
+    g.probe.after_valid=1u;
+    a.ui.more=1u; a.ui.redraw=1u;
+    finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
+    CHECK(contains(&a.ui,"TEST3 PINS RELEASED"));
+    CHECK(contains(&a.ui,"BEFORE SCL:0 SDA:0 BUSY:1"));
+    CHECK(contains(&a.ui,"AFTER10 SCL:1 SDA:1"));
+    CHECK(contains(&a.ui,"NOW SCL:1 SDA:1"));
+    save_image("ui_gyro_release.pgm");
+
 
     CHECK(!bad_layout); puts("PASS: rendered all 20 page variants, bounds, extreme counts, phase priority and invalid coordinates");
 }
