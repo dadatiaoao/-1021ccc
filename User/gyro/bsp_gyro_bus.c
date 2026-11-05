@@ -9,6 +9,22 @@
 #include <string.h>
 static I2C_HandleTypeDef gyro_i2c;
 static uint8_t lines_released;
+static GyroWireTrace wire_trace;
+static uint8_t wire_stage, wire_reg, wire_active;
+/* HAL hook: capture BEFORE AF clearing / STOP / timeout cleanup.
+ * SR2 precedes SR1 to avoid adding the SR1->SR2 ADDR-clear sequence.
+ * Never read DR. Only this private handle is observed. */
+void HAL_I2C_GyroTrace(I2C_HandleTypeDef *h, uint32_t stage, uint32_t reason)
+{
+    if (h!=&gyro_i2c || !wire_active || wire_trace.valid) return;
+    if (!reason) { wire_stage=(uint8_t)stage; return; }
+    wire_trace.stage=wire_stage; wire_trace.reg=wire_reg;
+    wire_trace.reason=(uint8_t)reason;
+    wire_trace.sr2=(uint16_t)h->Instance->SR2;
+    wire_trace.sr1=(uint16_t)h->Instance->SR1;
+    wire_trace.cr1=(uint16_t)h->Instance->CR1;
+    wire_trace.valid=1u;
+}
 /* Touch configures I2C2 GPIO itself and uses the HAL weak MSP. Keep that path
  * untouched: initialise ONLY this private I2C1 instance's pins/clock here. */
 /*
@@ -17,7 +33,8 @@ static uint8_t lines_released;
 static GyroBusError init(void *ctx)
 {
     GPIO_InitTypeDef g; (void)ctx;
-    lines_released=0u;
+    lines_released=0u; wire_active=0u;
+    memset(&wire_trace,0,sizeof(wire_trace));
     __HAL_RCC_GPIOB_CLK_ENABLE(); __HAL_RCC_I2C1_CLK_ENABLE();
     __HAL_RCC_I2C1_FORCE_RESET(); __HAL_RCC_I2C1_RELEASE_RESET();
     memset(&g,0,sizeof(g)); g.Pin=GPIO_PIN_6|GPIO_PIN_7;
@@ -78,8 +95,10 @@ static GyroBusError read_reg(void *ctx,uint8_t reg,uint8_t *v,size_t n)
     if (lines_released) return GYRO_BUS_IO;
     if (n==0u || n>6u || !v) return GYRO_BUS_IO;
     e=preflight(); if (e!=GYRO_BUS_OK) return e;
-    return result(HAL_I2C_Mem_Read(&gyro_i2c,(uint16_t)(GYRO_ADDRESS_7BIT<<1),reg,
+    wire_stage=0u; wire_reg=reg; wire_active=1u;
+    e=result(HAL_I2C_Mem_Read(&gyro_i2c,(uint16_t)(GYRO_ADDRESS_7BIT<<1),reg,
         I2C_MEMADD_SIZE_8BIT,v,(uint16_t)n,GYRO_BUS_TIMEOUT_MS));
+    wire_active=0u; return e;
 }
 /*
  * 写一个配置寄存器，沿用读操作相同的总线预检和有限 HAL 超时。
@@ -118,6 +137,6 @@ static void release_lines(void *ctx)
  */
 GyroIo BspGyroBus_Io(void)
 {
-    GyroIo io={0,init,read_reg,write_reg,millis,cycles,0u,lines,release_lines};
+    GyroIo io={0,init,read_reg,write_reg,millis,cycles,0u,lines,release_lines,&wire_trace};
     io.cycles_per_us=SystemCoreClock/1000000u; return io;
 }

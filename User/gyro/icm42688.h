@@ -7,6 +7,10 @@ typedef enum { GYRO_BUS_OK, GYRO_BUS_NACK, GYRO_BUS_TIMEOUT,
     GYRO_BUS_SCL_LOW, GYRO_BUS_SDA_LOW, GYRO_BUS_BOTH_LOW,
     GYRO_BUS_HW_BUSY } GyroBusError;
 typedef struct {
+    uint8_t valid, stage, reg, reason;
+    uint16_t sr1, sr2, cr1;
+} GyroWireTrace;
+typedef struct {
     void *ctx;
     GyroBusError (*init)(void *ctx);
     GyroBusError (*read)(void *ctx, uint8_t reg, uint8_t *data, size_t size);
@@ -18,6 +22,7 @@ typedef struct {
      * release_lines disconnects the controller; it must not send bus clocks. */
     uint8_t (*lines)(void *ctx);
     void (*release_lines)(void *ctx);
+    const GyroWireTrace *wire_trace;
 } GyroIo;
 enum { GYRO_TRACE_BUS_INIT, GYRO_TRACE_INIT, GYRO_TRACE_SAMPLE, GYRO_TRACE_CHECK };
 typedef struct {

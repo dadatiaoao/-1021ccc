@@ -323,7 +323,8 @@ void Gyro_Process(GyroService *s,uint32_t now,uint8_t motor_active)
  */
 void Gyro_GetSnapshot(const GyroService *s,uint32_t now,GyroSnapshot *out)
 {
-    *out=s->data; out->age_ms=out->have_sample ? now-out->sample_ms : UINT32_MAX;
+    *out=s->data;
+    if (s->io.wire_trace) out->wire_trace=*s->io.wire_trace; out->age_ms=out->have_sample ? now-out->sample_ms : UINT32_MAX;
     if (!fresh(s,now)) {
         out->raw_valid=out->rate_valid=out->angle_valid=0u;
         if (out->state==GYRO_RUNNING) out->error=GYRO_STALE;

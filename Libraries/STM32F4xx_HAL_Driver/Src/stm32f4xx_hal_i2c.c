@@ -279,6 +279,11 @@ static void I2C_ITError(I2C_HandleTypeDef *hi2c);
 static HAL_StatusTypeDef I2C_MasterRequestWrite(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint32_t Timeout, uint32_t Tickstart);
 static HAL_StatusTypeDef I2C_MasterRequestRead(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint32_t Timeout, uint32_t Tickstart);
 static HAL_StatusTypeDef I2C_RequestMemoryWrite(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemAddress, uint16_t MemAddSize, uint32_t Timeout, uint32_t Tickstart);
+/* Local passive gyro diagnostic hook; default leaves other builds unchanged.
+ * stage: 1 START, 2 address W, 3 TXE before register, 4 register TXE,
+ * 5 repeated START, 6 address R, 7 receive. reason: 1 AF, 2 timeout. */
+__weak void HAL_I2C_GyroTrace(I2C_HandleTypeDef *h, uint32_t stage, uint32_t reason)
+{ UNUSED(h); UNUSED(stage); UNUSED(reason); }
 static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t DevAddress, uint16_t MemAddress, uint16_t MemAddSize, uint32_t Timeout, uint32_t Tickstart);
 static HAL_StatusTypeDef I2C_WaitOnFlagUntilTimeout(I2C_HandleTypeDef *hi2c, uint32_t Flag, FlagStatus Status, uint32_t Timeout, uint32_t Tickstart);
 static HAL_StatusTypeDef I2C_WaitOnMasterAddressFlagUntilTimeout(I2C_HandleTypeDef *hi2c, uint32_t Flag, uint32_t Timeout, uint32_t Tickstart);
@@ -4969,6 +4974,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   hi2c->Instance->CR1 |= I2C_CR1_START;
 
   /* Wait until SB flag is set */
+  HAL_I2C_GyroTrace(hi2c, 1u, 0u);
   if(I2C_WaitOnFlagUntilTimeout(hi2c, I2C_FLAG_SB, RESET, Timeout, Tickstart) != HAL_OK)
   {
     return HAL_TIMEOUT;
@@ -4978,6 +4984,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   hi2c->Instance->DR = I2C_7BIT_ADD_WRITE(DevAddress);
 
   /* Wait until ADDR flag is set */
+  HAL_I2C_GyroTrace(hi2c, 2u, 0u);
   if(I2C_WaitOnMasterAddressFlagUntilTimeout(hi2c, I2C_FLAG_ADDR, Timeout, Tickstart) != HAL_OK)
   {
     if(hi2c->ErrorCode == HAL_I2C_ERROR_AF)
@@ -4994,6 +5001,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   __HAL_I2C_CLEAR_ADDRFLAG(hi2c);
 
   /* Wait until TXE flag is set */
+  HAL_I2C_GyroTrace(hi2c, 3u, 0u);
   if(I2C_WaitOnTXEFlagUntilTimeout(hi2c, Timeout, Tickstart) != HAL_OK)
   {
     if(hi2c->ErrorCode == HAL_I2C_ERROR_AF)
@@ -5021,6 +5029,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
     hi2c->Instance->DR = I2C_MEM_ADD_MSB(MemAddress);
 
     /* Wait until TXE flag is set */
+    HAL_I2C_GyroTrace(hi2c, 4u, 0u);
     if(I2C_WaitOnTXEFlagUntilTimeout(hi2c, Timeout, Tickstart) != HAL_OK)
     {
       if(hi2c->ErrorCode == HAL_I2C_ERROR_AF)
@@ -5040,6 +5049,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   }
 
   /* Wait until TXE flag is set */
+  HAL_I2C_GyroTrace(hi2c, 4u, 0u);
   if(I2C_WaitOnTXEFlagUntilTimeout(hi2c, Timeout, Tickstart) != HAL_OK)
   {
     if(hi2c->ErrorCode == HAL_I2C_ERROR_AF)
@@ -5058,6 +5068,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   hi2c->Instance->CR1 |= I2C_CR1_START;
 
   /* Wait until SB flag is set */
+  HAL_I2C_GyroTrace(hi2c, 5u, 0u);
   if(I2C_WaitOnFlagUntilTimeout(hi2c, I2C_FLAG_SB, RESET, Timeout, Tickstart) != HAL_OK)
   {
     return HAL_TIMEOUT;
@@ -5067,6 +5078,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
   hi2c->Instance->DR = I2C_7BIT_ADD_READ(DevAddress);
 
   /* Wait until ADDR flag is set */
+  HAL_I2C_GyroTrace(hi2c, 6u, 0u);
   if(I2C_WaitOnMasterAddressFlagUntilTimeout(hi2c, I2C_FLAG_ADDR, Timeout, Tickstart) != HAL_OK)
   {
     if(hi2c->ErrorCode == HAL_I2C_ERROR_AF)
@@ -5079,6 +5091,7 @@ static HAL_StatusTypeDef I2C_RequestMemoryRead(I2C_HandleTypeDef *hi2c, uint16_t
     }
   }
 
+  HAL_I2C_GyroTrace(hi2c, 7u, 0u);
   return HAL_OK;
 }
 
@@ -5237,6 +5250,7 @@ static HAL_StatusTypeDef I2C_WaitOnFlagUntilTimeout(I2C_HandleTypeDef *hi2c, uin
     {
       if((Timeout == 0U)||((HAL_GetTick() - Tickstart ) > Timeout))
       {
+        HAL_I2C_GyroTrace(hi2c, 0u, 2u);
         hi2c->PreviousState = I2C_STATE_NONE;
         hi2c->State= HAL_I2C_STATE_READY;
         hi2c->Mode = HAL_I2C_MODE_NONE;
@@ -5267,6 +5281,7 @@ static HAL_StatusTypeDef I2C_WaitOnMasterAddressFlagUntilTimeout(I2C_HandleTypeD
   {
     if(__HAL_I2C_GET_FLAG(hi2c, I2C_FLAG_AF) == SET)
     {
+      HAL_I2C_GyroTrace(hi2c, 0u, 1u);
       /* Generate Stop */
       hi2c->Instance->CR1 |= I2C_CR1_STOP;
 
@@ -5288,6 +5303,7 @@ static HAL_StatusTypeDef I2C_WaitOnMasterAddressFlagUntilTimeout(I2C_HandleTypeD
     {
       if((Timeout == 0U)||((HAL_GetTick() - Tickstart ) > Timeout))
       {
+        HAL_I2C_GyroTrace(hi2c, 0u, 2u);
         hi2c->PreviousState = I2C_STATE_NONE;
         hi2c->State= HAL_I2C_STATE_READY;
 
@@ -5325,6 +5341,7 @@ static HAL_StatusTypeDef I2C_WaitOnTXEFlagUntilTimeout(I2C_HandleTypeDef *hi2c, 
       if((Timeout == 0U) || ((HAL_GetTick()-Tickstart) > Timeout))
       {
         hi2c->ErrorCode |= HAL_I2C_ERROR_TIMEOUT;
+        HAL_I2C_GyroTrace(hi2c, 0u, 2u);
         hi2c->PreviousState = I2C_STATE_NONE;
         hi2c->State= HAL_I2C_STATE_READY;
 
@@ -5362,6 +5379,7 @@ static HAL_StatusTypeDef I2C_WaitOnBTFFlagUntilTimeout(I2C_HandleTypeDef *hi2c, 
       if((Timeout == 0U) || ((HAL_GetTick()-Tickstart) > Timeout))
       {
         hi2c->ErrorCode |= HAL_I2C_ERROR_TIMEOUT;
+        HAL_I2C_GyroTrace(hi2c, 0u, 2u);
         hi2c->PreviousState = I2C_STATE_NONE;
         hi2c->State= HAL_I2C_STATE_READY;
 
@@ -5463,6 +5481,7 @@ static HAL_StatusTypeDef I2C_IsAcknowledgeFailed(I2C_HandleTypeDef *hi2c)
 {
   if(__HAL_I2C_GET_FLAG(hi2c, I2C_FLAG_AF) == SET)
   {
+    HAL_I2C_GyroTrace(hi2c, 0u, 1u);
     /* Clear NACKF Flag */
     __HAL_I2C_CLEAR_FLAG(hi2c, I2C_FLAG_AF);
 

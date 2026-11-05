@@ -67,6 +67,6 @@ static uint8_t mock_lines(void *ctx)
 static void mock_release(void *ctx) { ++((GyroMock *)ctx)->releases; }
 static GyroIo GyroMock_Io(GyroMock *m)
 {
-    GyroIo io={m,mock_init,mock_read,mock_write,mock_ms,mock_cycles,1u,mock_lines,mock_release}; return io;
+    GyroIo io={m,mock_init,mock_read,mock_write,mock_ms,mock_cycles,1u,mock_lines,mock_release,0}; return io;
 }
 #endif

@@ -6,6 +6,8 @@
 static unsigned checks,clock_calls[4],busy,low_pin,hal_calls,init_failed,busy_tail,low_tail;
 static HAL_StatusTypeDef response;
 static uint32_t response_error;
+static unsigned inject_trace;
+void HAL_I2C_GyroTrace(I2C_HandleTypeDef *,uint32_t,uint32_t);
 static I2C_HandleTypeDef *handle;
 static unsigned disabled,input_calls;
 DwtMock dwt_mock;
@@ -37,6 +39,13 @@ static HAL_StatusTypeDef transfer(I2C_HandleTypeDef *h,uint16_t address,uint16_t
 {
     CHECK(h==handle && address==(uint16_t)(GYRO_ADDRESS_7BIT<<1));
     CHECK(size==I2C_MEMADD_SIZE_8BIT && timeout==2u);
+    if (inject_trace) {
+        HAL_I2C_GyroTrace(h,6u,0u);
+        h->Instance->SR1=0x400u; h->Instance->SR2=3u; h->Instance->CR1=0x401u;
+        HAL_I2C_GyroTrace(h,0u,1u);
+        h->Instance->SR1=0u; /* HAL cleanup must not erase the saved AF. */
+        HAL_I2C_GyroTrace(h,2u,0u); HAL_I2C_GyroTrace(h,0u,2u);
+    }
     ++hal_calls; h->ErrorCode=response_error; return response;
 }
 HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h,uint16_t address,uint16_t reg,uint16_t size,uint8_t *v,uint16_t n,uint32_t timeout)
@@ -44,6 +53,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h,uint16_t address,uint16_
 HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h,uint16_t address,uint16_t reg,uint16_t size,uint8_t *v,uint16_t n,uint32_t timeout)
 { CHECK(reg==0x4Fu && n==1u && *v==0x48u); return transfer(h,address,size,timeout); }
 uint32_t HAL_GetTick(void) { return 123u; }
+I2C_TypeDef gyro_test_regs;
 int main(void)
 {
     GyroIo io=BspGyroBus_Io(); uint8_t v; unsigned count,i;
@@ -88,6 +98,13 @@ int main(void)
     CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_IO && hal_calls==count);
     low_pin=busy=0u; CHECK(io.init(io.ctx)==GYRO_BUS_OK);
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_OK);
+    inject_trace=1u; response=HAL_ERROR; response_error=HAL_I2C_ERROR_AF;
+    CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_NACK);
+    CHECK(io.wire_trace->valid && io.wire_trace->stage==6u && io.wire_trace->reg==0x75u);
+    CHECK(io.wire_trace->sr1==0x400u && io.wire_trace->sr2==3u && io.wire_trace->cr1==0x401u);
+    CHECK(io.wire_trace->reason==1u);
+    io.release_lines(io.ctx); CHECK(io.wire_trace->valid);
+    CHECK(io.init(io.ctx)==GYRO_BUS_OK && !io.wire_trace->valid);
     init_failed=1u; CHECK(io.init(io.ctx)==GYRO_BUS_IO);
     CHECK(io.millis(io.ctx)==123u && io.cycles(io.ctx)==45678u);
     printf("GYRO I2C1 PASS %u checks, address 0x%02X; stuck BUSY/lines skip HAL\n",checks,GYRO_ADDRESS_7BIT);

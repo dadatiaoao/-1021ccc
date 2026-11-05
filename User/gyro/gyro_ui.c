@@ -53,8 +53,12 @@ static void probe_line(char t[43],unsigned row,const GyroSnapshot *d)
         case 6u:
             if (p->after_valid) snprintf(t,43,"NOW SCL:%u SDA:%u",p->lines_now&1u,(p->lines_now>>1)&1u);
             else strcpy(t,"NOW:--"); break;
-        case 7u: snprintf(t,43,"ID:%02X BADID:%lu",(unsigned)d->who,(unsigned long)p->before.bad_id); break;
-        case 8u: strcpy(t,p->after_valid ? "INPUT / NO PULL / NO RETRY" : "WAIT FIRST BUS ERROR"); break;
+        case 7u:
+            if (d->wire_trace.valid) snprintf(t,43,"FIRST S:%u R:%02X C1:%04X",d->wire_trace.stage,d->wire_trace.reg,d->wire_trace.cr1);
+            else strcpy(t,"FIRST:-- (NO HAL CAPTURE)"); break;
+        case 8u:
+            if (d->wire_trace.valid) snprintf(t,43,"SR1:%04X SR2:%04X E:%u",d->wire_trace.sr1,d->wire_trace.sr2,d->wire_trace.reason);
+            else strcpy(t,"WAIT FIRST HAL ERROR"); break;
         default: break;
         }
         return;

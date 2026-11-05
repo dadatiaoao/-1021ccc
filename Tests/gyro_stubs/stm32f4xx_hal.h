@@ -5,7 +5,9 @@ typedef enum { HAL_OK,HAL_ERROR,HAL_BUSY,HAL_TIMEOUT } HAL_StatusTypeDef;
 typedef enum { GPIO_PIN_RESET,GPIO_PIN_SET } GPIO_PinState;
 typedef struct { unsigned ClockSpeed,DutyCycle,OwnAddress1,AddressingMode,DualAddressMode,
     OwnAddress2,GeneralCallMode,NoStretchMode; } I2C_InitTypeDef;
-typedef struct { void *Instance; I2C_InitTypeDef Init; uint32_t ErrorCode; } I2C_HandleTypeDef;
+typedef struct { uint32_t SR1,SR2,CR1; } I2C_TypeDef;
+extern I2C_TypeDef gyro_test_regs;
+typedef struct { I2C_TypeDef *Instance; I2C_InitTypeDef Init; uint32_t ErrorCode; } I2C_HandleTypeDef;
 typedef struct { uint32_t Pin,Mode,Pull,Speed,Alternate; } GPIO_InitTypeDef;
 typedef struct { uint32_t CTRL,CYCCNT; } DwtMock;
 typedef struct { uint32_t DEMCR; } CoreMock;
@@ -16,7 +18,7 @@ extern uint32_t SystemCoreClock;
 #define CoreDebug (&core_mock)
 #define CoreDebug_DEMCR_TRCENA_Msk 1u
 #define DWT_CTRL_CYCCNTENA_Msk 1u
-#define I2C1 ((void *)1)
+#define I2C1 (&gyro_test_regs)
 #define GPIOB ((void *)2)
 #define GPIO_PIN_6 0x40u
 #define GPIO_PIN_7 0x80u
