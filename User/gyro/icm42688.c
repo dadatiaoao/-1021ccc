@@ -104,6 +104,14 @@ int Icm_Step(Icm42688 *p,const GyroIo *io,uint32_t now)
         if (!(v&BIT_INT_STATUS_RESET_DONE)) return ICM_RESET_ERROR;
         break;
     case 7u:
+        /* Controlled experiment: only Bank 1 INTF_CONFIG4 gets a pre-read.
+           Keep one bus transaction per step and all other writes unchanged. */
+        if (p->index==1u && !p->verify && !p->config4_read) {
+            if (!rd(p,io,settings[p->index][0],&v,1u)) return ICM_BUS_ERROR;
+            p->config4_before=v; p->config4_read=1u;
+            if (v==settings[p->index][1]) ++p->index; /* Already configured. */
+            return ICM_NO_DATA;
+        }
         if (!p->verify) {
             if (!wr(p,io,settings[p->index][0],settings[p->index][1])) return ICM_BUS_ERROR;
             p->verify=1u;

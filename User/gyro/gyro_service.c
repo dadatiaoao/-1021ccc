@@ -179,6 +179,9 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
     }
     if (d->state==GYRO_INIT) {
         r=Icm_Step(&s->chip,&s->io,now); d->who=s->chip.who;
+        if (s->chip.config4_read) {
+            d->config4_seen=1u; d->config4_before=s->chip.config4_before;
+        }
         if (r==ICM_READY) {
             d->state=GYRO_RUNNING; d->bus_error=GYRO_BUS_OK;
             s->last_poll=s->last_check=s->ready_ms=s->io.millis(s->io.ctx);

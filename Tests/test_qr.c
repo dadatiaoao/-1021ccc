@@ -590,9 +590,11 @@ static void render_pages(void)
     g.last_bus_failure=g.first_bus_failure; g.last_bus_failure.stage=GYRO_TRACE_SAMPLE;
     g.last_bus_failure.op='R'; g.last_bus_failure.reg=0x2Du;
     g.last_bus_failure.bus=GYRO_BUS_TIMEOUT; a.ui.redraw=1u;
+    g.config4_seen=1u; g.config4_before=0x83u;
     finish_ui(&a.ui,&a.qr,&a.motor,&g,tick); validate_widgets(&a.ui);
     CHECK(contains(&a.ui,"FIRST:INIT7.25 W:4E BOTH_LOW"));
     CHECK(contains(&a.ui,"RECENT:SAMPLE R:2D TIMEOUT"));
+    CHECK(contains(&a.ui,"LAST7A:83 SKIP"));
     save_image("ui_gyro_failure_records.pgm");
     CHECK(!bad_layout); puts("PASS: rendered all 20 page variants, bounds, extreme counts, phase priority and invalid coordinates");
 }

@@ -17,6 +17,7 @@ typedef struct {
     GyroState state; GyroError error, last_fault; GyroBusError bus_error, last_bus_error;
     GyroCalibration calibration;
     GyroBusFailure first_bus_failure, last_bus_failure;
+    uint8_t config4_seen, config4_before; /* Latest successful pre-read, across retries. */
     int16_t raw[3];
     float raw_dps, bias_dps, rate_dps;
     double angle_deg;

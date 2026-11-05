@@ -24,6 +24,7 @@ typedef struct {
     uint32_t due;
     uint8_t phase, index, verify, who, check_index;
     uint8_t trace_stage, trace_op, trace_reg;
+    uint8_t config4_read, config4_before;
     GyroBusError bus_error;
 } Icm42688;
 enum { ICM_NO_DATA=0, ICM_READY=1, ICM_BUS_ERROR=-1, ICM_ID_ERROR=-2,

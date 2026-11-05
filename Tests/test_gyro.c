@@ -274,9 +274,57 @@ static void test_bus_failure_records(void)
     CHECK(s.data.first_bus_failure.reg==0x75u && s.data.first_bus_failure.op=='R');
     GyroUi_Line(line,4u,1u,&s.data); CHECK(!strcmp(line,"FIRST:CHECK0 R:75 NACK"));
 }
+static void test_config4_preread(void)
+{
+    GyroService s; GyroMock m; unsigned n,scenario,writes,reads; char line[43];
+    for(scenario=0u;scenario<5u;++scenario) {
+        GyroMock_Reset(&m,0u); Gyro_Init(&s,GyroMock_Io(&m),0u);
+        for(n=0u;n<300u && !(s.chip.phase==7u && s.chip.index==1u);++n)
+            step(&s,&m,m.now+1u,0u);
+        CHECK(s.chip.phase==7u && s.chip.index==1u && !s.chip.verify);
+        CHECK(m.reg[0x76]==1u); /* Bank write AND its readback completed. */
+        writes=m.writes; reads=m.reads;
+        if(scenario>=2u) m.reg1[0x7A]=0xC3u;
+        if(scenario==1u) { m.fail_reg=0x7A; m.failure=GYRO_BUS_NACK; }
+        step(&s,&m,m.now+1u,0u);
+        CHECK(m.writes==writes && m.reads==reads+1u);
+        if(scenario==1u) {
+            CHECK(s.data.state==GYRO_ERROR && !s.data.config4_seen);
+            CHECK(s.data.first_bus_failure.op=='R' && s.data.first_bus_failure.reg==0x7Au);
+            GyroUi_Line(line,5u,1u,&s.data); CHECK(strstr(line,"LAST7A:--"));
+            continue;
+        }
+        CHECK(s.data.config4_seen && s.data.config4_before==(scenario==0u ? 0x83u:0xC3u));
+        GyroUi_Line(line,5u,1u,&s.data);
+        CHECK(strstr(line,scenario==0u ? "LAST7A:83 SKIP" : "LAST7A:C3 WRITE"));
+        if(scenario==0u) {
+            CHECK(s.chip.index==2u && !s.chip.verify);
+            step(&s,&m,m.now+1u,0u);
+            CHECK(m.writes==writes+1u && s.chip.trace_reg==0x7Bu && s.chip.verify);
+            continue;
+        }
+        CHECK(s.chip.index==1u && !s.chip.verify);
+        if(scenario==3u) { m.fail_reg=0x7A; m.failure=GYRO_BUS_TIMEOUT; }
+        step(&s,&m,m.now+1u,0u);
+        CHECK(m.writes==writes+1u);
+        if(scenario==3u) {
+            CHECK(s.data.state==GYRO_ERROR && s.data.config4_before==0xC3u);
+            CHECK(s.data.first_bus_failure.op=='W' && s.data.first_bus_failure.reg==0x7Au);
+            run(&s,&m,300u); /* Failed retry must not erase the prior value. */
+            CHECK(s.data.config4_seen && s.data.config4_before==0xC3u);
+            continue;
+        }
+        CHECK(s.chip.verify && m.reg1[0x7A]==0x83u);
+        if(scenario==4u) m.corrupt_reg=0x7A;
+        step(&s,&m,m.now+1u,0u);
+        CHECK(m.reads==reads+2u);
+        if(scenario==4u) CHECK(s.data.state==GYRO_ERROR && s.data.error==GYRO_CONFIG);
+        else CHECK(s.chip.index==2u && !s.chip.verify);
+    }
+}
 int main(void)
 {
-    test_bus_failure_records(); test_visible_diagnostics(); test_chip(); test_service(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
+    test_config4_preread(); test_bus_failure_records(); test_visible_diagnostics(); test_chip(); test_service(); test_cal_failures(); test_recovery_wrap_ui(); test_startup_and_cal_bus_failure();
     printf("GYRO PASS %u checks, axis %u sign %d, service %u bytes (host ABI)\n",checks,GYRO_AXIS,GYRO_SIGN,(unsigned)sizeof(GyroService));
     return 0;
 }

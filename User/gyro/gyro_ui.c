@@ -51,7 +51,12 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
         case 2u: snprintf(t,43,"SEQ:%lu DT:%lums",(unsigned long)d->sequence,(unsigned long)d->interval_ms); break;
         case 3u: snprintf(t,43,"MAXdt:%lu POLL:%lums",(unsigned long)d->max_interval_ms,(unsigned long)d->max_poll_ms); break;
         case 4u: failure_line(t,"FIRST",&d->first_bus_failure); break;
-        case 5u: snprintf(t,43,"MISS:%lu GAP:%lu",(unsigned long)d->missed,(unsigned long)d->gaps); break;
+        case 5u:
+            if (d->config4_seen)
+                snprintf(t,43,"LAST7A:%02X %s GAP:%lu",(unsigned)d->config4_before,
+                         d->config4_before==0x83u ? "SKIP" : "WRITE",(unsigned long)d->gaps);
+            else snprintf(t,43,"LAST7A:-- GAP:%lu",(unsigned long)d->gaps);
+            break;
         case 6u: failure_line(t,"RECENT",&d->last_bus_failure); break;
         case 7u: snprintf(t,43,"LAST:%s LBUS:%s",Gyro_ErrorName(d->last_fault),bus_name(d->last_bus_error)); break;
         case 8u: snprintf(t,43,"REINIT:%lu E:%lu",(unsigned long)d->restarts,(unsigned long)d->errors); break;
