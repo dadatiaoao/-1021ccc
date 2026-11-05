@@ -65,7 +65,7 @@ static GyroBusError preflight(void)
 static GyroBusError read_reg(void *ctx,uint8_t reg,uint8_t *v,size_t n)
 {
     GyroBusError e; (void)ctx;
-    if (n==0u || n>6u || !v) return GYRO_BUS_IO;
+    if (n==0u || n>15u || !v) return GYRO_BUS_IO;
     e=preflight(); if (e!=GYRO_BUS_OK) return e;
     return result(HAL_I2C_Mem_Read(&gyro_i2c,(uint16_t)(GYRO_ADDRESS_7BIT<<1),reg,
         I2C_MEMADD_SIZE_8BIT,v,(uint16_t)n,GYRO_BUS_TIMEOUT_MS));

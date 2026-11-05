@@ -5,7 +5,7 @@
  * rate_dps 为扣偏置角速度，angle_deg 为相对积分角；分别检查有效位及 age_ms。
  * GYRO_MOTOR_* 参数表示校准拒绝原因枚举，不能当成实物静止证明。
  */
-#include "icm42688.h"
+#include "mpu6050.h"
 typedef enum { GYRO_INIT, GYRO_RUNNING, GYRO_ERROR } GyroState;
 typedef enum { GYRO_OK, GYRO_BUS, GYRO_ID, GYRO_RESET, GYRO_CONFIG,
     GYRO_BAD_SAMPLE, GYRO_SATURATED, GYRO_GAP, GYRO_STALE } GyroError;
@@ -26,7 +26,7 @@ typedef struct {
     int8_t sign;
 } GyroSnapshot;
 typedef struct {
-    GyroIo io; Icm42688 chip; GyroSnapshot data;
+    GyroIo io; Mpu6050 chip; GyroSnapshot data;
     uint32_t due, retry_ms, last_poll, last_check, ready_ms, cal_start, cal_first;
     float mean[3], m2[3], minimum[3], maximum[3], previous_rate;
     uint8_t have_previous;

@@ -1,5 +1,5 @@
-#ifndef ICM42688_H
-#define ICM42688_H
+#ifndef MPU6050_H
+#define MPU6050_H
 #include <stdint.h>
 #include <stddef.h>
 typedef enum { GYRO_BUS_OK, GYRO_BUS_NACK, GYRO_BUS_TIMEOUT,
@@ -17,12 +17,12 @@ typedef struct {
     uint32_t due;
     uint8_t phase, index, verify, who, check_index;
     GyroBusError bus_error;
-} Icm42688;
-enum { ICM_NO_DATA=0, ICM_READY=1, ICM_BUS_ERROR=-1, ICM_ID_ERROR=-2,
-    ICM_RESET_ERROR=-3, ICM_CONFIG_ERROR=-4, ICM_INVALID=-5,
-    ICM_SATURATED=-6, ICM_RESET_DETECTED=-7 };
-void Icm_Begin(Icm42688 *p, uint32_t now);
-int Icm_Step(Icm42688 *p, const GyroIo *io, uint32_t now);
-int Icm_Fetch(Icm42688 *p, const GyroIo *io, int16_t raw[3], uint32_t *sample_ms);
-int Icm_Check(Icm42688 *p, const GyroIo *io);
+} Mpu6050;
+enum { MPU_NO_DATA=0, MPU_READY=1, MPU_BUS_ERROR=-1, MPU_ID_ERROR=-2,
+    MPU_RESET_ERROR=-3, MPU_CONFIG_ERROR=-4, MPU_INVALID=-5,
+    MPU_SATURATED=-6, MPU_RESET_DETECTED=-7 };
+void Mpu_Begin(Mpu6050 *p, uint32_t now);
+int Mpu_Step(Mpu6050 *p, const GyroIo *io, uint32_t now);
+int Mpu_Fetch(Mpu6050 *p, const GyroIo *io, int16_t raw[3], uint32_t *sample_ms);
+int Mpu_Check(Mpu6050 *p, const GyroIo *io);
 #endif

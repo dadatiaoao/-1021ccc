@@ -1,5 +1,5 @@
 ﻿/*
- * 单旋转轴陀螺服务：分步启动 ICM-42688，轮询 DRDY，静止校准零偏，
+ * 单旋转轴陀螺服务：分步启动 MPU6050，轮询 DRDY，静止校准零偏，
  * 发布选定轴角速度（deg/s）及连续有效样本的相对转角（deg）。
  * 无 FIFO 时缺口不可补算；积分是相对量，会漂移，不是绝对航向或完整姿态融合。
  */
@@ -33,9 +33,9 @@ static void cal_fail(GyroService *s,GyroCalibration c)
 }
 static GyroError chip_error(int r)
 {
-    if (r==ICM_ID_ERROR) return GYRO_ID;
-    if (r==ICM_RESET_ERROR || r==ICM_RESET_DETECTED) return GYRO_RESET;
-    if (r==ICM_CONFIG_ERROR) return GYRO_CONFIG;
+    if (r==MPU_ID_ERROR) return GYRO_ID;
+    if (r==MPU_RESET_ERROR || r==MPU_RESET_DETECTED) return GYRO_RESET;
+    if (r==MPU_CONFIG_ERROR) return GYRO_CONFIG;
     return GYRO_BUS;
 }
 /*
@@ -79,9 +79,9 @@ static void start(GyroService *s,uint32_t now)
     s->data.angle_valid=1u;
     s->data.angle_gap=0u;
 #endif
-    Icm_Begin(&s->chip,now);
+    Mpu_Begin(&s->chip,now);
     e=s->io.init(s->io.ctx);
-    if (e!=GYRO_BUS_OK) { s->chip.bus_error=e; fault(s,ICM_BUS_ERROR,now); }
+    if (e!=GYRO_BUS_OK) { s->chip.bus_error=e; fault(s,MPU_BUS_ERROR,now); }
 }
 /*
  * 绑定 I2C/时钟接口并应用安装轴与符号配置，启动分阶段初始化。
@@ -168,8 +168,8 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
         return;
     }
     if (d->state==GYRO_INIT) {
-        r=Icm_Step(&s->chip,&s->io,now); d->who=s->chip.who;
-        if (r==ICM_READY) {
+        r=Mpu_Step(&s->chip,&s->io,now); d->who=s->chip.who;
+        if (r==MPU_READY) {
             d->state=GYRO_RUNNING; d->bus_error=GYRO_BUS_OK;
             s->last_poll=s->last_check=s->ready_ms=s->io.millis(s->io.ctx);
             s->retry_ms=GYRO_RETRY_MIN_MS;
@@ -184,7 +184,7 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
         if (d->calibration==GYRO_CAL_RUNNING) cal_fail(s,GYRO_CAL_GAP);
         gap(s,GYRO_STALE); d->raw_valid=d->rate_valid=0u;
         if ((uint32_t)(now-(d->have_sample ? d->sample_ms : s->ready_ms))>=GYRO_NO_DATA_RESTART_MS) {
-            fault(s,ICM_RESET_ERROR,now); return;
+            fault(s,MPU_RESET_ERROR,now); return;
         }
     }
     poll_dt=now-s->last_poll;
@@ -197,17 +197,17 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
         if (d->calibration==GYRO_CAL_RUNNING) cal_fail(s,GYRO_CAL_GAP);
     }
     if ((uint32_t)(now-s->last_check)>=GYRO_CHECK_MS) {
-        s->last_check=now; r=Icm_Check(&s->chip,&s->io); d->who=s->chip.who;
+        s->last_check=now; r=Mpu_Check(&s->chip,&s->io); d->who=s->chip.who;
         if (r<0) fault(s,r,s->io.millis(s->io.ctx));
         return; /* No DRDY poll occurred; do not postpone the next fetch. */
     }
     s->last_poll=now;
-    r=Icm_Fetch(&s->chip,&s->io,raw,&at); d->bus_error=s->chip.bus_error;
-    if (r==ICM_NO_DATA) return;
-    if (r==ICM_INVALID || r==ICM_SATURATED) {
-        if (r==ICM_INVALID) ++d->invalid; else ++d->saturations;
+    r=Mpu_Fetch(&s->chip,&s->io,raw,&at); d->bus_error=s->chip.bus_error;
+    if (r==MPU_NO_DATA) return;
+    if (r==MPU_INVALID || r==MPU_SATURATED) {
+        if (r==MPU_INVALID) ++d->invalid; else ++d->saturations;
         if (d->calibration==GYRO_CAL_RUNNING) cal_fail(s,GYRO_CAL_ERROR);
-        gap(s,r==ICM_INVALID ? GYRO_BAD_SAMPLE : GYRO_SATURATED);
+        gap(s,r==MPU_INVALID ? GYRO_BAD_SAMPLE : GYRO_SATURATED);
         d->raw_valid=d->rate_valid=0u; return;
     }
     if (r<0) { fault(s,r,s->io.millis(s->io.ctx)); return; }

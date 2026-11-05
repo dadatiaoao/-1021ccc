@@ -34,37 +34,39 @@ static HAL_StatusTypeDef transfer(I2C_HandleTypeDef *h,uint16_t address,uint16_t
     ++hal_calls; h->ErrorCode=response_error; return response;
 }
 HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h,uint16_t address,uint16_t reg,uint16_t size,uint8_t *v,uint16_t n,uint32_t timeout)
-{ CHECK(reg==0x75u && n==1u); *v=0x47; return transfer(h,address,size,timeout); }
+{ CHECK((reg==0x75u && n==1u) || (reg==0x3Au && n==15u));
+  *v=0x68; return transfer(h,address,size,timeout); }
 HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h,uint16_t address,uint16_t reg,uint16_t size,uint8_t *v,uint16_t n,uint32_t timeout)
-{ CHECK(reg==0x4Fu && n==1u && *v==0x48u); return transfer(h,address,size,timeout); }
+{ CHECK(reg==0x1Bu && n==1u && *v==0x08u); return transfer(h,address,size,timeout); }
 uint32_t HAL_GetTick(void) { return 123u; }
 int main(void)
 {
-    GyroIo io=BspGyroBus_Io(); uint8_t v; unsigned count,i;
+    GyroIo io=BspGyroBus_Io(); uint8_t v,burst[15]; unsigned count,i;
     dwt_mock.CYCCNT=45678u; CHECK(io.init(io.ctx)==GYRO_BUS_OK);
     CHECK(dwt_mock.CYCCNT==45678u && io.cycles_per_us==180u);
     for (i=0u;i<4u;++i) CHECK(clock_calls[i]==1u);
-    CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_OK && v==0x47u);
-    CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_OK);
+    CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_OK && v==0x68u);
+    CHECK(io.read(io.ctx,0x3Au,burst,15u)==GYRO_BUS_OK);
+    CHECK(io.write(io.ctx,0x1Bu,0x08u)==GYRO_BUS_OK);
     busy_tail=3u; CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_OK && !busy_tail);
-    low_tail=3u; CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_OK && !low_tail);
+    low_tail=3u; CHECK(io.write(io.ctx,0x1Bu,0x08u)==GYRO_BUS_OK && !low_tail);
     count=hal_calls; busy=1u;
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_BUSY && hal_calls==count);
-    CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_BUSY && hal_calls==count);
+    CHECK(io.write(io.ctx,0x1Bu,0x08u)==GYRO_BUS_BUSY && hal_calls==count);
     busy=0u; low_pin=GPIO_PIN_6;
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_BUSY && hal_calls==count);
     low_pin=GPIO_PIN_7;
-    CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_BUSY && hal_calls==count);
+    CHECK(io.write(io.ctx,0x1Bu,0x08u)==GYRO_BUS_BUSY && hal_calls==count);
     low_pin=0u; response=HAL_ERROR; response_error=HAL_I2C_ERROR_AF;
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_NACK);
     response=HAL_TIMEOUT; CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_TIMEOUT);
     response=HAL_ERROR; response_error=HAL_I2C_ERROR_TIMEOUT;
-    CHECK(io.write(io.ctx,0x4Fu,0x48u)==GYRO_BUS_TIMEOUT);
+    CHECK(io.write(io.ctx,0x1Bu,0x08u)==GYRO_BUS_TIMEOUT);
     response=HAL_BUSY; response_error=0u;
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_BUSY);
     response=HAL_ERROR; CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_IO);
     CHECK(io.read(io.ctx,0x75u,&v,0u)==GYRO_BUS_IO);
-    CHECK(io.read(io.ctx,0x75u,&v,7u)==GYRO_BUS_IO);
+    CHECK(io.read(io.ctx,0x75u,&v,16u)==GYRO_BUS_IO);
     CHECK(io.read(io.ctx,0x75u,0,1u)==GYRO_BUS_IO);
     response=HAL_OK; CHECK(io.init(io.ctx)==GYRO_BUS_OK && dwt_mock.CYCCNT==45678u);
     CHECK(io.read(io.ctx,0x75u,&v,1u)==GYRO_BUS_OK);

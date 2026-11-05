@@ -1,4 +1,29 @@
-# ICM42688 driver provenance
+# Gyro driver provenance
+
+## MPU6050 migration (2026-11-05)
+
+The active driver is now `mpu6050.c/.h`. The bounded state-machine structure
+was adapted from this project's previous Apache-2.0 ICM implementation, so its
+copyright notices and license remain. No third-party MPU driver was copied.
+The old register bank, I3C setup, reset interrupt, DRDY bit and invalid-sentinel
+rules have been replaced, not reused as MPU6050 register behavior.
+
+Primary references read:
+- InvenSense RM-MPU-6000A-00 rev 4.0, [manufacturer-authored register map hosted by SparkFun](https://cdn.sparkfun.com/datasheets/Sensors/Accelerometers/RM-MPU-6000A.pdf): registers 25–27, 55–58, 67–72, 106–108 and 117, shadow-register coherency and status clearing.
+- InvenSense PS-MPU-6000A-00 rev 3.4, [TDK product specification](https://product.tdk.com/system/files/dam/doc/product/sensor/mortion-inertial/imu/data_sheet/mpu-6000-datasheet1.pdf): electrical levels, I2C/address, axes and startup.
+
+The old TDK register-map download redirects to a search page; the directly
+readable manufacturer-authored rev 4.0 mirror is recorded explicitly above.
+MPU configuration is 100 Hz, +/-500 dps, 20 Hz DLPF, gyro XYZ enabled,
+accel/temp/FIFO/auxiliary master disabled. Every setting is read back and
+periodically checked. There is no RESET_DONE interrupt or reserved negative
+sample encoding. A status poll followed by a coherent 15-byte status/data
+burst consumes any event arriving between the transactions. Existing service,
+calibration, UI and bus timeout/recovery contracts are retained, with the old
+fixed bias disabled by default. See [migration record](../../Doc/MPU6050_MIGRATION_2026-11-05.md).
+
+## Original ICM42688 source history
+
 
 Adapted from Zephyr **v3.7.0**, commit `36940db938a8f4a1e919496793ed439850a221c2` (tag resolved through GitHub's commit API).
 
@@ -8,9 +33,9 @@ Read and used:
 - [icm42688.c](https://github.com/zephyrproject-rtos/zephyr/blob/36940db938a8f4a1e919496793ed439850a221c2/drivers/sensor/tdk/icm42688/icm42688.c), blob `febb4612efaf8167c5731fcb59d9797fcc30491a`.
 - [icm42688_reg.h](https://github.com/zephyrproject-rtos/zephyr/blob/36940db938a8f4a1e919496793ed439850a221c2/drivers/sensor/tdk/icm42688/icm42688_reg.h), blob `5f3b58f0b3c074d69ee029cf1d956f4f73dd554e`.
 
-Apache-2.0. Original copyright notices are retained in `icm42688.c`; full license is in `LICENSE-Apache-2.0.txt`. This directory contains a **modified subset**, not an unmodified vendor SDK. Register values and added behavior were checked against TDK DS-000347 rev 1.6.
+Apache-2.0. Original copyright notices are retained in `mpu6050.c`; full license is in `LICENSE-Apache-2.0.txt`. This directory contains a **modified subset**, not an unmodified vendor SDK. Register values and added behavior were checked against TDK DS-000347 rev 1.6.
 
-## Preserved core logic
+## Historical ICM42688 core logic (before MPU6050 migration)
 
 | Upstream function | Local implementation | Preserved behavior |
 |---|---|---|
@@ -19,7 +44,7 @@ Apache-2.0. Original copyright notices are retained in `icm42688.c`; full licens
 | `icm42688_sample_fetch` / `icm42688_read_all` | `Icm_Fetch` | Status → DRDY gate → one burst → signed big-endian decoding; no-data is distinct from a new sample |
 | Register header | Relevant constants in `icm42688.c` | Register addresses, WHO_AM_I and status bits |
 
-## Deliberate changes
+## Historical ICM42688 changes
 
 - Replace Zephyr device/SPI/logging/sleep/byteorder glue with a small injected `GyroIo`, implemented by independent STM32 hardware I2C1. No RTOS or new toolchain.
 - Split sleeps and configuration into deadlines and one transaction per initialization step. Check identity before reset as well as after it. Verify bank, reset-bit clear and every written setting.

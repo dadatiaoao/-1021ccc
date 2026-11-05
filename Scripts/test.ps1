@@ -10,7 +10,7 @@ $sourceArgs = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $command = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /execution-charset:utf-8 /std:c11 /D_CRT_SECURE_NO_WARNINGS /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $sourceArgs + ' /Fe:motor_tests.exe && motor_tests.exe'
 & $env:ComSpec /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'Motor host tests failed' }
-$qrSources = @('Tests\test_qr.c', 'Tests\servo_app_stub.c', 'User\servo\servo_control.c', 'User\servo\servo_math.c', 'User\mission\mission.c', 'User\mission\mission_ui.c', 'Tests\gyro_app_stub.c', 'User\gyro\icm42688.c', 'User\gyro\gyro_service.c', 'User\gyro\gyro_ui.c', 'User\app\qr_ui.c', 'User\app\qr_app.c', 'User\app\app_runtime.c',
+$qrSources = @('Tests\test_qr.c', 'Tests\servo_app_stub.c', 'User\servo\servo_control.c', 'User\servo\servo_math.c', 'User\mission\mission.c', 'User\mission\mission_ui.c', 'Tests\gyro_app_stub.c', 'User\gyro\mpu6050.c', 'User\gyro\gyro_service.c', 'User\gyro\gyro_ui.c', 'User\app\qr_ui.c', 'User\app\qr_app.c', 'User\app\app_runtime.c',
     'User\usart\bsp_qr_uart.c', 'User\usart\bsp_qr_trigger.c', 'User\usart\bsp_uart_callbacks.c',
     'User\motor\emm_protocol.c', 'User\motor\motor_service.c', 'User\motor\motor_bus.c',
     'User\fonts\font16.c', 'User\fonts\font24.c') | ForEach-Object { Join-Path $projectRoot $_ }
@@ -19,7 +19,7 @@ $qrSources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'User\chassis
 $qrSources += @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'User\mechanism') -Filter '*.c' | ForEach-Object { $_.FullName })
 $qrArgs = ($qrSources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 # Existing gyro calibration tests use the normal calibration mode.
-# A separate fixed-bias build below covers the shipped application configuration.
+# A separate fixed-bias build below covers only the legacy opt-in configuration.
 $qrCommand = 'call "' + $vcvars + '" >nul && cd /d "' + $testOutput + '" && cl /nologo /W4 /WX /execution-charset:utf-8 /std:c11 /D_CRT_SECURE_NO_WARNINGS /DGYRO_TEMP_FIXED_BIAS_ENABLED=0 /DMECHANISM_TRIAL_RUN=0 /I"' + (Join-Path $projectRoot 'Tests\stubs') + '" /I"' + (Join-Path $projectRoot 'User') + '" ' + $qrArgs + ' /Fe:qr_tests.exe && qr_tests.exe && qr_tests.exe init && qr_tests.exe dma && qr_tests.exe receive && qr_tests.exe start && qr_tests.exe timing && qr_tests.exe timing-servo && qr_tests.exe timing-home && qr_tests.exe actions'
 & $env:ComSpec /d /s /c $qrCommand
 if ($LASTEXITCODE -ne 0) { throw 'QR host tests failed' }
@@ -42,10 +42,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Motor UART5 BSP host tests failed' }
 $fixedCommand = $qrCommand.Replace('/DGYRO_TEMP_FIXED_BIAS_ENABLED=0', '/DGYRO_TEMP_FIXED_BIAS_ENABLED=1').Replace('/Fe:qr_tests.exe', '/Fe:qr_fixed_tests.exe')
 $fixedCommand = $fixedCommand.Substring(0, $fixedCommand.IndexOf(' && qr_tests.exe')) + ' && qr_fixed_tests.exe && qr_fixed_tests.exe actions && qr_fixed_tests.exe timing && qr_fixed_tests.exe timing-servo && qr_fixed_tests.exe timing-home'
 & $env:ComSpec /d /s /c $fixedCommand
-if ($LASTEXITCODE -ne 0) { throw 'Default fixed-bias application tests failed' }
+if ($LASTEXITCODE -ne 0) { throw 'Legacy fixed-bias application tests failed' }
 # Keep uncalibrated production gates covered above, then build the actual
-# shipped TRIAL=1 / fixed-gyro profile and verify its automatic startup path.
-$trialAppCommand=$fixedCommand.Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:qr_fixed_tests.exe','/Fe:qr_trial_tests.exe')
+# shipped TRIAL=1 / real-CAL gyro profile and verify its automatic startup path.
+$trialAppCommand=$fixedCommand.Replace('/DGYRO_TEMP_FIXED_BIAS_ENABLED=1','').Replace('/DMECHANISM_TRIAL_RUN=0','/DMECHANISM_TRIAL_RUN=1').Replace('/Fe:qr_fixed_tests.exe','/Fe:qr_trial_tests.exe')
 $trialAppCommand=$trialAppCommand.Substring(0,$trialAppCommand.IndexOf(' && qr_fixed_tests.exe'))+' && qr_trial_tests.exe trial-boot && qr_trial_tests.exe render'
 & $env:ComSpec /d /s /c $trialAppCommand
 if ($LASTEXITCODE -ne 0) { throw 'Shipped trial application tests failed' }

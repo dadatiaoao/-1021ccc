@@ -889,9 +889,9 @@
           <GroupName>GYRO</GroupName>
           <Files>
             <File>
-              <FileName>icm42688.c</FileName>
+              <FileName>mpu6050.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\User\gyro\icm42688.c</FilePath>
+              <FilePath>..\User\gyro\mpu6050.c</FilePath>
             </File>
             <File>
               <FileName>bsp_gyro_bus.c</FileName>

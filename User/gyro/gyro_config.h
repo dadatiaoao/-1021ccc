@@ -1,6 +1,6 @@
 #ifndef GYRO_CONFIG_H
 #define GYRO_CONFIG_H
-/* WDS601M CHIP side only: PS open, CS=3V3, SA0=GND. I2C1 PB6/PB7. */
+/* MPU6050: AD0=GND, I2C1 PB6=SCL / PB7=SDA; XDA/XCL/INT unused. */
 #ifndef GYRO_ADDRESS_7BIT
 #define GYRO_ADDRESS_7BIT 0x68u
 #endif
@@ -13,36 +13,24 @@
 #if GYRO_AXIS < 0 || GYRO_AXIS > 2 || (GYRO_SIGN != 1 && GYRO_SIGN != -1)
 #error Invalid gyro mounting configuration
 #endif
-/*
- * TEMPORARY BRING-UP WORKAROUND (2026-10-22, remove before release):
- * the module currently fitted shows a large, apparently stable stationary
- * zero-rate offset of about 15.86 deg/s on the mapped axis (value seen as RAW
- * while the module is at rest; GYRO_SIGN is already applied, so it is in the
- * same unit as RAW/RATE). Because the normal CAL motion gate rejects raw
- * samples above GYRO_CAL_MAX_ABS_DPS (5 deg/s), CAL can only report
- * CAL:MOVING for this module, so RATE/REL would stay unavailable until a
- * healthy module is fitted. Until then, let the service treat the measured
- * offset as the known bias so the rest of the chain can be exercised.
- *
- * This is NOT calibration data, NOT a measured specification and NOT a final
- * configuration. To restore normal CAL-only behaviour set
- * GYRO_TEMP_FIXED_BIAS_ENABLED to 0 (or delete this block), fit a healthy
- * module, then run a real CAL. If GYRO_AXIS/GYRO_SIGN change before removal,
- * GYRO_TEMP_FIXED_BIAS_DPS must be re-measured in the new mapped axis.
- */
+/* MPU6050 must use a real CAL; the old ICM module's 15.86 dps is not portable.
+ * Keep the opt-in legacy test switch, but disable it in the shipped profile. */
 #ifndef GYRO_TEMP_FIXED_BIAS_ENABLED
-#define GYRO_TEMP_FIXED_BIAS_ENABLED 1
+#define GYRO_TEMP_FIXED_BIAS_ENABLED 0
 #endif
 #ifndef GYRO_TEMP_FIXED_BIAS_DPS
 #define GYRO_TEMP_FIXED_BIAS_DPS 15.86f
 #endif
 #if GYRO_ADDRESS_7BIT != 0x68u && GYRO_ADDRESS_7BIT != 0x69u
-#error SA0 must select 0x68 or 0x69
+#error AD0 must select 0x68 or 0x69
 #endif
 #define GYRO_I2C_HZ 100000u
 #define GYRO_BUS_TIMEOUT_MS 2u
 /* Fixed matched FSR/ODR/filter tuple; change together and requalify timing. */
-#define GYRO_CONFIG0_VALUE 0x48u /* +/-500 dps, 100 Hz */
+#define GYRO_CONFIG_VALUE 0x08u /* FS_SEL=1: +/-500 dps */
+#define GYRO_DLPF_VALUE 0x04u /* 20 Hz gyro bandwidth, internal 1 kHz */
+#define GYRO_SMPLRT_DIV 9u /* 1000 / (1+9) = 100 Hz */
+#define GYRO_RESET_WAIT_MS 100u
 #define GYRO_LSB_PER_DPS 65.5f
 #define GYRO_PERIOD_MS 10u
 #define GYRO_POLL_MS 2u
