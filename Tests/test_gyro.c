@@ -139,7 +139,7 @@ static void test_cal_failures(void)
 static void test_recovery_wrap_ui(void)
 {
     GyroService s; GyroMock m; GyroSnapshot d; unsigned i; uint32_t at; char line[43];
-    for (i=GYRO_BUS_NACK;i<=GYRO_BUS_IO;++i) {
+    for (i=GYRO_BUS_NACK;i<=GYRO_BUS_HW_BUSY;++i) {
         setup(&s,&m,0u); cal(&s,&m); m.failure=(GyroBusError)i;
         run(&s,&m,5u); CHECK(s.data.state==GYRO_ERROR && s.data.bus_error==(GyroBusError)i);
         at=m.initializations; run(&s,&m,200u); CHECK(m.initializations==at);
@@ -168,7 +168,7 @@ static void test_recovery_wrap_ui(void)
 static void test_startup_and_cal_bus_failure(void)
 {
     GyroService s; GyroMock m; unsigned i; float bias; Icm42688 p; GyroIo io;
-    for (i=GYRO_BUS_NACK;i<=GYRO_BUS_IO;++i) {
+    for (i=GYRO_BUS_NACK;i<=GYRO_BUS_HW_BUSY;++i) {
         GyroMock_Reset(&m,0u); m.init_failure=(GyroBusError)i;
         Gyro_Init(&s,GyroMock_Io(&m),0u);
         CHECK(s.data.state==GYRO_ERROR && s.data.errors==1u && !s.data.raw_valid);
@@ -193,6 +193,16 @@ static void test_startup_and_cal_bus_failure(void)
 static void test_visible_diagnostics(void)
 {
     GyroSnapshot d={0}; char line[43];
+    unsigned i;
+    static const char * const busy_names[]={"SCL_LOW","SDA_LOW","BOTH_LOW","HW_BUSY"};
+    for (i=0u;i<4u;++i) {
+        d.state=GYRO_ERROR; d.error=GYRO_BUS;
+        d.bus_error=d.last_bus_error=(GyroBusError)(GYRO_BUS_SCL_LOW+i);
+        GyroUi_Line(line,6u,0u,&d);
+        CHECK(strstr(line,"ERR:I2C BUS:") && strstr(line,busy_names[i]));
+        GyroUi_Line(line,7u,1u,&d);
+        CHECK(strstr(line,"LBUS:") && strstr(line,busy_names[i]));
+    }
     d.state=GYRO_INIT; GyroUi_Line(line,6u,0u,&d); CHECK(strstr(line,"INIT:"));
     d.state=GYRO_ERROR; d.error=GYRO_BUS; d.bus_error=GYRO_BUS_BUSY;
     GyroUi_Line(line,6u,0u,&d); CHECK(!strcmp(line,"ERR:I2C BUS:BUSY"));

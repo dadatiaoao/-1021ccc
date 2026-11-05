@@ -17,7 +17,8 @@ static void decimal(char t[20],double value)
 }
 static const char *bus_name(GyroBusError e)
 {
-    static const char * const names[]={"OK","NACK","TIMEOUT","BUSY","IO"};
+    static const char * const names[]={"OK","NACK","TIMEOUT","BUSY","IO",
+        "SCL_LOW","SDA_LOW","BOTH_LOW","HW_BUSY"};
     return (unsigned)e<sizeof(names)/sizeof(names[0]) ? names[e] : "UNKNOWN";
 }
 /*

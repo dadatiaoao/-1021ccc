@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include <stddef.h>
 typedef enum { GYRO_BUS_OK, GYRO_BUS_NACK, GYRO_BUS_TIMEOUT,
-    GYRO_BUS_BUSY, GYRO_BUS_IO } GyroBusError;
+    GYRO_BUS_BUSY, GYRO_BUS_IO,
+    GYRO_BUS_SCL_LOW, GYRO_BUS_SDA_LOW, GYRO_BUS_BOTH_LOW,
+    GYRO_BUS_HW_BUSY } GyroBusError;
 typedef struct {
     void *ctx;
     GyroBusError (*init)(void *ctx);

@@ -52,12 +52,20 @@ static GyroBusError preflight(void)
     /* HAL returns before its own STOP necessarily clears BUSY. Allow that
        short tail to finish; a stuck bus gets a 200us cycle deadline (plus IRQ
        latency), never HAL's 25ms. If DWT stops, the finite spin cap applies. */
-    while (__HAL_I2C_GET_FLAG(&gyro_i2c,I2C_FLAG_BUSY) ||
-        HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_6)==GPIO_PIN_RESET ||
-        HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_7)==GPIO_PIN_RESET) {
-        if ((uint32_t)(DWT->CYCCNT-began)>=limit || --spins==0u) return GYRO_BUS_BUSY;
+    for (;;) {
+        /* Sample BOTH pins even when the peripheral BUSY flag is set.
+           Report the last observed condition, not a presumed root cause. */
+        uint8_t scl_low=HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_6)==GPIO_PIN_RESET;
+        uint8_t sda_low=HAL_GPIO_ReadPin(GPIOB,GPIO_PIN_7)==GPIO_PIN_RESET;
+        uint8_t hw_busy=__HAL_I2C_GET_FLAG(&gyro_i2c,I2C_FLAG_BUSY)!=0u;
+        if (!scl_low && !sda_low && !hw_busy) return GYRO_BUS_OK;
+        if ((uint32_t)(DWT->CYCCNT-began)>=limit || --spins==0u) {
+            if (scl_low && sda_low) return GYRO_BUS_BOTH_LOW;
+            if (scl_low) return GYRO_BUS_SCL_LOW;
+            if (sda_low) return GYRO_BUS_SDA_LOW;
+            return GYRO_BUS_HW_BUSY;
+        }
     }
-    return GYRO_BUS_OK;
 }
 /*
  * 有界寄存器读取：先验证长度与总线空闲，再用 HAL 内存访问并映射 NACK/忙/超时等错误。
