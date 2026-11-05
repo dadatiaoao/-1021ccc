@@ -110,7 +110,8 @@ void QrApp_Process(QrApp *a, uint32_t now)
     }
     else if (action == QR_UI_RESCAN)
         BspQrUart_BeginSession(&a->qr, now);
-    else if (action==QR_UI_CHASSIS_START) (void)Chassis_StartAcceptance(&a->chassis,now);
+    else if (action==QR_UI_CHASSIS_FORWARD) (void)Chassis_StartStraightMove(&a->chassis,300.0f,now);
+    else if (action==QR_UI_CHASSIS_BACKWARD) (void)Chassis_StartStraightMove(&a->chassis,-300.0f,now);
     else if (action==QR_UI_MECH_HOME) (void)Mechanism_HomeAll(&a->mechanism,now);
     else if (action==QR_UI_MECH_TEST) (void)Mechanism_StartAcceptance(&a->mechanism,now);
     else if ((action==QR_UI_GYRO_CAL || action==QR_UI_GYRO_ZERO) &&

@@ -520,7 +520,7 @@ static void test_dashboard(void)
     touch_x=479-420; touch_y=271-248; advance(&a,1u);
     CHECK(!a.motor.stop_mask); touch_down=0; advance(&a,1u);
     press(&a,420,248); CHECK(a.motor.nodes[6].stop_unconfirmed);
-    advance(&a,2000u); CHECK(!a.motor.wheels_pending && !a.chassis.data.sequence_active);
+    advance(&a,2000u); CHECK(!a.motor.wheels_pending && !Chassis_OwnsWheels(&a.chassis));
     CHECK(!bad_layout);
     puts("PASS: dashboard navigation, MORE, all 7 read-only motors, limits, locked QR and rotated STOP");
 }
@@ -653,9 +653,10 @@ static void test_actions(void)
     CHECK(app_motor.count==before);
     a.chassis.config.mechanical_confirmed=1u;
     advance(&a,1000u); press(&a,40,210); advance(&a,700u);
-    CHECK(a.chassis.data.sequence_active && a.chassis.data.state==CHASSIS_MOVING);
+    CHECK(a.chassis.data.target_x_mm==300.0f && a.chassis.data.state==CHASSIS_MOVING);
     request=a.chassis.data.request_id;
     press(&a,40,210); CHECK(a.chassis.data.request_id==request); /* no restart */
+    press(&a,280,210); CHECK(a.chassis.data.request_id==request && a.chassis.data.target_x_mm==300.0f);
     press(&a,40,248); press(&a,200,120); zeros=a.gyro.data.zeros;
     press(&a,200,210); CHECK(a.gyro.data.zeros==zeros && a.chassis.data.rejection==CHASSIS_AXIS_BUSY);
     CHECK(contains(&a.ui,"ZERO REJECT: CHASSIS BUSY")); validate_widgets(&a.ui);
@@ -664,6 +665,14 @@ static void test_actions(void)
     press(&a,420,248); advance(&a,1800u);
     CHECK(a.chassis.data.result==CHASSIS_CANCELLED && !a.motor.wheels_pending);
     for(i=0u;i<7u;++i) CHECK(!a.motor.nodes[i].stop_unconfirmed);
+    press(&a,140,248); press(&a,420,18); press(&a,280,210); advance(&a,700u);
+    CHECK(a.chassis.data.state==CHASSIS_MOVING && a.chassis.data.target_x_mm==-300.0f);
+    request=a.chassis.data.request_id;
+    touch_x=479-280; touch_y=271-210; touch_down=1u; advance(&a,300u);
+    CHECK(a.chassis.data.request_id==request); touch_down=0u; advance(&a,1u);
+    press(&a,420,248); advance(&a,1800u);
+    CHECK(!Chassis_OwnsWheels(&a.chassis) && !a.chassis.pending_move_mm);
+    press(&a,40,248); press(&a,200,120);
     press(&a,200,210); CHECK(!a.ui.gyro_notice && a.gyro.data.zeros==zeros+1u);
     CHECK(!contains(&a.ui,"REJECT:"));
     GyroTest_Fail(1u); advance(&a,20u); press(&a,200,210);
@@ -671,7 +680,7 @@ static void test_actions(void)
     press(&a,40,248); press(&a,200,120); CHECK(!a.ui.gyro_notice);
     CHECK(contains(&a.ui,"ERR:I2C BUS:NACK")); validate_widgets(&a.ui);
     GyroTest_Fail(0u);
-    CHECK(!bad_layout); puts("PASS: action edges, config gates, chassis START deduplication, gyro arbitration and seven-axis STOP");
+    CHECK(!bad_layout); puts("PASS: action edges, config gates, forward/backward buttons and deduplication, gyro arbitration and seven-axis STOP");
     press(&a,40,248); press(&a,420,18); press(&a,40,210);
     CHECK(a.ui.page==UI_SERVO && a.ui.servo_ready);
     press(&a,420,248); advance(&a,1800u);

@@ -9,8 +9,8 @@ static ChassisRequestResult reject(Chassis *c, ChassisRequestResult r, ChassisRe
 { c->data.rejection=why; return r; }
 int Chassis_OwnsWheels(const Chassis *c)
 {
-    return c->data.sequence_active || (c->data.state!=CHASSIS_DISARMED &&
-        c->data.state!=CHASSIS_READY && c->data.state!=CHASSIS_FAULT);
+    return c->data.state!=CHASSIS_DISARMED &&
+        c->data.state!=CHASSIS_READY && c->data.state!=CHASSIS_FAULT;
 }
 static int stopped(const Chassis *c)
 {
@@ -66,8 +66,7 @@ static void begin_stop(Chassis *c, ChassisResult result, ChassisReason why, uint
             fault->wheel=o->break_wheel;
         }
     }
-    c->data.sequence_active=(uint8_t)(result==CHASSIS_SUCCESS && c->data.sequence_active);
-    c->between=0u; c->data.done=0u;
+    c->pending_move_mm=0.0f;
     if (c->data.state==CHASSIS_STOPPING) {
         if (result!=CHASSIS_SUCCESS) { c->stop_result=result; c->data.result=result; c->data.reason=why; }
         return;
@@ -84,7 +83,7 @@ static void request_id(Chassis *c)
 {
     if (!++c->data.request_id) ++c->data.request_id;
     memset(&c->data.fault,0,sizeof(c->data.fault));
-    c->data.rejection=CHASSIS_OK; c->data.reason=CHASSIS_OK; c->data.done=0u;
+    c->data.rejection=CHASSIS_OK; c->data.reason=CHASSIS_OK;
 }
 ChassisRequestResult Chassis_Prepare(Chassis *c, uint32_t now)
 {
@@ -102,8 +101,7 @@ static ChassisRequestResult motion_ready(Chassis *c, uint32_t now, uint8_t close
 {
     ChassisReason why;
     if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
-    if (c->data.sequence_active || (c->data.state!=CHASSIS_READY &&
-        c->data.state!=CHASSIS_VELOCITY)) return reject(c,
+    if (c->data.state!=CHASSIS_READY && c->data.state!=CHASSIS_VELOCITY) return reject(c,
             Chassis_OwnsWheels(c) ? CHASSIS_BUSY : CHASSIS_NOT_READY,CHASSIS_AXIS_BUSY);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,closed);
     if (c->data.config_issues) return reject(c,CHASSIS_INVALID,CHASSIS_CONFIG);
@@ -183,9 +181,11 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle, float limit
     r=motion_ready(c,now,1u); if (r!=CHASSIS_ACCEPTED) return r;
     return begin_action(c,0.0f,0.0f,angle,limit,2u,now);
 }
-ChassisRequestResult Chassis_StartAcceptance(Chassis *c, uint32_t now)
+ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance, uint32_t now)
 {
     ChassisRequestResult r;
+    if (!Chassis_Finite(distance) || distance==0.0f || fabs(distance)>10000.0)
+        return reject(c,CHASSIS_INVALID,CHASSIS_BAD_REQUEST);
     if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,1u);
@@ -195,7 +195,8 @@ ChassisRequestResult Chassis_StartAcceptance(Chassis *c, uint32_t now)
         return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     r=Chassis_Prepare(c,now);
     if (r==CHASSIS_ACCEPTED) {
-        c->data.sequence_active=1u; c->data.stage=0u;
+        c->pending_move_mm=distance;
+        c->data.target_x_mm=distance; c->data.target_y_mm=c->data.target_angle_deg=0.0f;
         c->action_gyro=c->gyro; c->odometry_generation=c->odometry.generation;
     }
     return r;
@@ -237,7 +238,6 @@ static void stop_process(Chassis *c, uint32_t now)
             c->stop_result=CHASSIS_FAILED;
             c->data.result=CHASSIS_FAILED;
             if (c->data.reason==CHASSIS_OK) c->data.reason=CHASSIS_STOP_TIMEOUT;
-            c->data.sequence_active=0u;
         }
         return;
     }
@@ -250,10 +250,6 @@ static void stop_process(Chassis *c, uint32_t now)
     c->data.stop_pending=0u; c->data.result=c->stop_result;
     c->data.state=c->stop_result==CHASSIS_FAILED ? CHASSIS_FAULT : CHASSIS_READY;
     c->finite=0u;
-    if (c->data.result==CHASSIS_SUCCESS && c->data.sequence_active) {
-        if (c->data.stage==8u) { c->data.done=1u; c->data.sequence_active=0u; }
-        else { c->between=1u; c->between_due=now+c->config.between_ms; }
-    } else c->data.sequence_active=0u;
 }
 static ChassisVelocity closed_velocity(const Chassis *c)
 {
@@ -284,19 +280,6 @@ static void slew(Chassis *c, ChassisVelocity target, float dt)
     if (da>angular) da=angular; if (da< -angular) da= -angular;
     c->data.output.omega+=da;
 }
-static void sequence_process(Chassis *c, uint32_t now)
-{
-    static const float x[6]={300.0f,-300.0f,0.0f,0.0f,200.0f,-200.0f};
-    static const float y[6]={0.0f,0.0f,300.0f,-300.0f,200.0f,-200.0f};
-    ChassisRequestResult r;
-    uint8_t stage;
-    if (!c->data.sequence_active || c->data.state!=CHASSIS_READY ||
-        (c->between && !due(now,c->between_due))) return;
-    c->between=0u; stage=++c->data.stage;
-    r=stage<=6u ? begin_action(c,x[stage-1u],y[stage-1u],0.0f,c->config.max_speed_mm_s,1u,now) :
-        begin_action(c,0.0f,0.0f,stage==7u ? 90.0f : -90.0f,c->config.max_rate_deg_s,2u,now);
-    if (r!=CHASSIS_ACCEPTED) begin_stop(c,CHASSIS_FAILED,c->data.rejection,now);
-}
 void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
 {
     unsigned i; ChassisReason why; uint32_t lease;
@@ -324,10 +307,10 @@ void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
         c->observed_frames=c->bus->wheel_frames;
     }
     if (c->data.state==CHASSIS_PREPARING) prepare_process(c,now);
-    if (c->data.sequence_active && !c->finite) {
+    if (c->pending_move_mm!=0.0f) {
         if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
-        else if (c->data.stage<6u && (!c->odometry.valid || c->odometry.generation!=c->odometry_generation))
+        else if (!c->odometry.valid || c->odometry.generation!=c->odometry_generation)
             begin_stop(c,CHASSIS_FAILED,CHASSIS_ODOMETRY_INVALID,now);
     }
     if (c->finite) {
@@ -340,14 +323,20 @@ void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
     if (c->data.state==CHASSIS_VELOCITY && due(now,c->input_deadline)) {
         begin_stop(c,CHASSIS_FAILED,CHASSIS_INPUT_EXPIRED,now); return;
     }
-    if (c->data.sequence_active || c->data.state==CHASSIS_VELOCITY || c->finite) {
+    if (c->pending_move_mm!=0.0f || c->data.state==CHASSIS_VELOCITY || c->finite) {
         why=health(c,now,1u,(uint8_t)(c->data.state==CHASSIS_READY));
         /* Enable confirmation is asynchronous while preparing. */
         if (c->data.state!=CHASSIS_PREPARING && why!=CHASSIS_OK) {
             begin_stop(c,CHASSIS_FAILED,why,now); return;
         }
     }
-    sequence_process(c,now);
+    if (c->pending_move_mm!=0.0f && c->data.state==CHASSIS_READY) {
+        float distance=c->pending_move_mm;
+        ChassisRequestResult r;
+        c->pending_move_mm=0.0f;
+        r=begin_action(c,distance,0.0f,0.0f,c->config.max_speed_mm_s,1u,now);
+        if (r!=CHASSIS_ACCEPTED) { begin_stop(c,CHASSIS_FAILED,c->data.rejection,now); return; }
+    }
     if (c->finite) {
         if (due(now,c->deadline)) { begin_stop(c,CHASSIS_FAILED,CHASSIS_ACTION_TIMEOUT,now); return; }
         if (!in_window(c)) c->stable=0u;
@@ -393,9 +382,4 @@ const char *Chassis_ReasonName(ChassisReason r)
         "CHASSIS BUSY","ENABLE FAILED","PREPARE TIMEOUT","INPUT EXPIRED","GYRO INVALID","ODOM INVALID",
         "SENSOR CHANGED","ACTION TIMEOUT","STOP TIMEOUT","FINAL ERROR","INVALID REQUEST","BUS REJECTED"};
     return (unsigned)r<17u ? names[r] : "?";
-}
-const char *Chassis_StageName(uint8_t s)
-{
-    static const char * const names[]={"PREPARE","FORWARD","BACKWARD","LEFT","RIGHT","DIAG FL","DIAG RR","CCW","CW"};
-    return s<=8u ? names[s] : "?";
 }

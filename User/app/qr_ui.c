@@ -71,7 +71,10 @@ QrUiAction QrUi_Touch(QrUi *u,int32_t x,int32_t y,uint8_t down)
         if (hit(x,y,8,44,464,22)) { u->axis=(uint8_t)((u->axis+1u)%3u); u->redraw=1u; }
         else if (hit(x,y,8,196,140,30)) return QR_UI_MECH_HOME;
         else if (hit(x,y,160,196,140,30)) return QR_UI_MECH_TEST;
-    } else if (u->page==UI_CHASSIS && u->more && hit(x,y,8,196,216,30)) return QR_UI_CHASSIS_START;
+    } else if (u->page==UI_CHASSIS && u->more) {
+        if (hit(x,y,8,196,216,30)) return QR_UI_CHASSIS_FORWARD;
+        if (hit(x,y,248,196,224,30)) return QR_UI_CHASSIS_BACKWARD;
+    }
     else if (u->page==UI_GYRO && !u->more && hit(x,y,8,196,140,30)) return QR_UI_GYRO_CAL;
     else if (u->page==UI_GYRO && !u->more && hit(x,y,160,196,140,30)) return QR_UI_GYRO_ZERO;
     else if (u->page==UI_QR && !u->more && hit(x,y,8,196,216,30)) return QR_UI_RESCAN;
@@ -101,7 +104,7 @@ static const char *phase(const QrUi *u,const MotorBus *b)
     for (i=0u;i<MOTOR_COUNT;++i) if (b->nodes[i].stop_unconfirmed) return /* 停车未确认 */ "\345\201\234\350\275\246\346\234\252\347\241\256\350\256\244";
     if ((m && m->data.state==MECH_FAULT) || (c && c->data.state==CHASSIS_FAULT)) return /* 故障待处理 */ "\346\225\205\351\232\234\345\276\205\345\244\204\347\220\206";
     if (m && Mechanism_OwnsAxes(m)) return m->data.homing ? /* 机构回零中 */ "\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255" : /* 机构动作中 */ "\346\234\272\346\236\204\345\212\250\344\275\234\344\270\255";
-    if (c && Chassis_OwnsWheels(c)) return c->data.sequence_active ? /* 底盘验收中 */ "\345\272\225\347\233\230\351\252\214\346\224\266\344\270\255" : /* 底盘运动中 */ "\345\272\225\347\233\230\350\277\220\345\212\250\344\270\255";
+    if (c && Chassis_OwnsWheels(c)) return /* 底盘运动中 */ "\345\272\225\347\233\230\350\277\220\345\212\250\344\270\255";
     if (m && m->auto_pending) return /* 上电准备中 */ "\344\270\212\347\224\265\345\207\206\345\244\207\344\270\255";
     if ((m && m->data.result==MECH_CANCELLED) || (c && c->data.result==CHASSIS_CANCELLED)) return /* 已停止 */ "\345\267\262\345\201\234\346\255\242";
     if (m && (!m->data.reference[0] || !m->data.reference[1] || !m->data.trim_ready)) return /* 等待机构就绪 */ "\347\255\211\345\276\205\346\234\272\346\236\204\345\260\261\347\273\252";
@@ -122,9 +125,6 @@ static void home(QrUi *u,const QrService *q,const MotorBus *b,
         if (u->mechanism && Mechanism_OwnsAxes(u->mechanism) &&
             !u->mechanism->data.stop_pending && !stops && u->mechanism->data.state!=MECH_FAULT)
             snprintf(step,sizeof(step)," [A%u]",u->mechanism->data.axis+5u);
-        else if (u->chassis && u->chassis->data.sequence_active &&
-            !u->chassis->data.stop_pending && !stops && u->chassis->data.state!=CHASSIS_FAULT)
-            snprintf(step,sizeof(step)," [%u/8]",u->chassis->data.stage);
         snprintf(t,sizeof(t),/* 阶段: %s%s%s */ "\351\230\266\346\256\265: %s%s%s",p,step,MECHANISM_TRIAL_RUN ? " / TRIAL" : ""); row(u,0u,t);
     }
     if (u->more) {
@@ -193,6 +193,7 @@ static void chassis(QrUi *u,uint32_t now)
 {
     const Chassis *c=u->chassis; const ChassisSnapshot *d;
     char t[UI_TEXT_BYTES],a[20],b[20],v[20]; unsigned i;
+    static const char * const results[]={"IDLE","RUNNING","SUCCESS","CANCELLED","FAILED"};
     if (!c) { row(u,0u,"UNAVAILABLE"); return; } d=&c->data;
     if (!u->more) {
         const ChassisOdometry *o=&c->odometry;
@@ -204,11 +205,11 @@ static void chassis(QrUi *u,uint32_t now)
         snprintf(t,sizeof(t),"Y: %s mm",b); row(u,2u,t);
         snprintf(t,sizeof(t),"YAW: %s deg",v); row(u,3u,t);
         snprintf(t,sizeof(t),"%s  SEG:%lu",valid ? "VALID" : "INVALID / WAIT",(unsigned long)o->generation); row(u,4u,t);
-        snprintf(t,sizeof(t),"%s %u/8 %s",Chassis_StateName(d->state),d->stage,Chassis_StageName(d->stage)); row(u,5u,t);
+        snprintf(t,sizeof(t),"%s / %s",Chassis_StateName(d->state),results[d->result]); row(u,5u,t);
         row(u,6u,Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason : d->rejection));
         row(u,7u,/* 打滑不可观测，断链后重新建立坐标段 */ "\346\211\223\346\273\221\344\270\215\345\217\257\350\247\202\346\265\213\357\274\214\346\226\255\351\223\276\345\220\216\351\207\215\346\226\260\345\273\272\347\253\213\345\235\220\346\240\207\346\256\265"); return;
     }
-    snprintf(t,sizeof(t),"%s %u/8 %s",Chassis_StateName(d->state),d->stage,Chassis_StageName(d->stage)); row(u,0u,t);
+    snprintf(t,sizeof(t),"%s / %s",Chassis_StateName(d->state),results[d->result]); row(u,0u,t);
     for (i=0u;i<4u;++i) {
         const MotorNode *n=&c->bus->nodes[i];
         if (MotorBus_Fresh(n,MOTOR_VALID_SPEED,now)) snprintf(v,sizeof(v),"%ld",(long)n->data.speed_rpm); else strcpy(v,"--");
@@ -216,7 +217,8 @@ static void chassis(QrUi *u,uint32_t now)
     }
     snprintf(t,sizeof(t),"%.20s / %.18s",Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason : d->rejection),
         d->fault.valid ? Chassis_OdometryIssueName(d->fault.issue) : Chassis_OdometryIssueName(c->odometry.last_issue)); row(u,5u,t);
-    (void)item(u,8,196,216,30,1,/* 底盘八段验收 */ "\345\272\225\347\233\230\345\205\253\346\256\265\351\252\214\346\224\266");
+    (void)item(u,8,196,216,30,1,"\345\211\215\350\277\233\063\060cm");
+    (void)item(u,248,196,224,30,1,"\345\220\216\351\200\200\063\060cm");
 }
 static void mechanism(QrUi *u,uint32_t now)
 {

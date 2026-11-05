@@ -144,9 +144,9 @@ static void finish(Sim *s, uint32_t max)
 {
     uint32_t t;
     for (t=0u;t<max && Chassis_OwnsWheels(&s->chassis);++t) run(s,1u);
-    if (Chassis_OwnsWheels(&s->chassis)) fprintf(stderr,"state=%s reason=%s stage=%u err=%f/%f\n",
+    if (Chassis_OwnsWheels(&s->chassis)) fprintf(stderr,"state=%s reason=%s err=%f/%f\n",
         Chassis_StateName(s->chassis.data.state),Chassis_ReasonName(s->chassis.data.reason),
-        s->chassis.data.stage,s->chassis.data.error_mm,s->chassis.data.error_deg);
+        s->chassis.data.error_mm,s->chassis.data.error_deg);
     CHECK(!Chassis_OwnsWheels(&s->chassis));
 }
 static void kinematics(void)
@@ -294,31 +294,32 @@ static void fault_evidence_tests(void)
 }
 static void closed_tests(void)
 {
-    Sim s; uint32_t t; unsigned stage=0u, count=0u; double sx=0,sy=0,sa=0;
+    Sim s; unsigned i,groups; double start;
     init(&s);
-    CHECK(Chassis_StartAcceptance(&s.chassis,s.now)==CHASSIS_ACCEPTED);
-    CHECK(Chassis_StartAcceptance(&s.chassis,s.now)==CHASSIS_BUSY);
-    for (t=0u;t<120000u && Chassis_OwnsWheels(&s.chassis);++t) {
-        if (s.chassis.data.stage!=stage) { stage=s.chassis.data.stage; sx=s.x; sy=s.y; sa=s.angle; }
-        if (s.chassis.data.result==CHASSIS_SUCCESS && s.chassis.data.state==CHASSIS_READY && stage>count) {
-            double ex=s.chassis.data.target_x_mm, ey=s.chassis.data.target_y_mm;
-            double dx=cos(sa*RAD)*(s.x-sx)+sin(sa*RAD)*(s.y-sy);
-            double dy=-sin(sa*RAD)*(s.x-sx)+cos(sa*RAD)*(s.y-sy);
-            if (stage<=6u) { CHECK(hypot(dx-ex,dy-ey)<20.0); CHECK(fabs(s.angle-sa)<5.0); }
-            else CHECK(fabs((s.angle-sa)-s.chassis.data.target_angle_deg)<5.0);
-            ++count;
-        }
-        CHECK(Chassis_SetBodyVelocity(&s.chassis,10,0,0,s.now)==CHASSIS_BUSY);
-        run(&s,1u);
+    for (i=0u;i<2u;++i) {
+        float distance=i ? -300.0f : 300.0f;
+        init(&s); start=s.x;
+        CHECK(Chassis_StartStraightMove(&s.chassis,distance,s.now)==CHASSIS_ACCEPTED);
+        CHECK(Chassis_StartStraightMove(&s.chassis,-distance,s.now)==CHASSIS_BUSY);
+        finish(&s,20000u);
+        if (s.chassis.data.result!=CHASSIS_SUCCESS) fprintf(stderr,"straight %u: %s %s x=%f pending=%f\n",i,Chassis_StateName(s.chassis.data.state),Chassis_ReasonName(s.chassis.data.reason),s.x,s.chassis.pending_move_mm);
+        CHECK(s.chassis.data.result==CHASSIS_SUCCESS && !s.chassis.pending_move_mm);
+        NEAR(s.x-start,distance,20.0); NEAR(s.y,0,20.0); NEAR(s.angle,0,5.0);
+        CHECK(!s.bad_axis);
+        groups=s.groups; run(&s,3000u); CHECK(s.groups==groups);
     }
-    if (!s.chassis.data.done) fprintf(stderr,"sequence state %s reason %s stage %u errors %f %f\n",
-        Chassis_StateName(s.chassis.data.state),Chassis_ReasonName(s.chassis.data.reason),
-        s.chassis.data.stage,s.chassis.data.error_mm,s.chassis.data.error_deg);
-    CHECK(s.chassis.data.done && s.chassis.data.result==CHASSIS_SUCCESS && stage==8u && count==7u);
-    CHECK(!s.bad_axis && s.stop_applied>=32u); NEAR(s.angle-sa,-90,5.0);
-    { unsigned n=s.groups; run(&s,3000u); CHECK(s.groups==n && s.chassis.data.done); }
-    printf("SIMULATION ONLY: eight segments complete in %lu ms, return %.1f/%.1f mm %.1f deg\n",
-        (unsigned long)t,s.x,s.y,s.angle);
+    /* Repeated opposite moves still enforce the original post-stop window.
+       This plant/poll phase overshoots the second move and must report failure. */
+    init(&s);
+    CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_ACCEPTED);
+    finish(&s,20000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS); run(&s,3000u);
+    CHECK(Chassis_StartStraightMove(&s.chassis,-300,s.now)==CHASSIS_ACCEPTED);
+    finish(&s,20000u);
+    CHECK(s.chassis.data.result==CHASSIS_FAILED && s.chassis.data.reason==CHASSIS_FINAL_ERROR);
+    groups=s.groups; run(&s,3000u); CHECK(s.groups==groups && !s.chassis.pending_move_mm);
+    init(&s); CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_ACCEPTED);
+    Chassis_Stop(&s.chassis,s.now); finish(&s,6000u); run(&s,3000u);
+    CHECK(!s.groups && !s.chassis.pending_move_mm && s.chassis.data.result==CHASSIS_CANCELLED);
     init(&s); ready(&s);
     CHECK(Chassis_RotateRelative(&s.chassis,270,30,s.now)==CHASSIS_ACCEPTED);
     finish(&s,40000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS); NEAR(s.angle,270,5.0);
@@ -335,7 +336,7 @@ static void closed_tests(void)
     CHECK(Chassis_MoveRelative(&s.chassis,100,0,100,s.now)==CHASSIS_ACCEPTED);
     finish(&s,15000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS);
     NEAR(s.x,0.0,0.001); CHECK(s.chassis.data.x_mm>90.0);
-    puts("PASS: independent plant/eight segments/+270 then local move/stuck timeout; wheel slip is explicitly unobservable");
+    puts("PASS: independent plant/forward-backward 300mm/+270 then local move/stuck timeout; wheel slip is explicitly unobservable");
 }
 static void faults(void)
 {
@@ -355,7 +356,7 @@ static void faults(void)
         if (i==8u) s.drop_ack=1u;
         run(&s,3500u);
         CHECK(s.chassis.data.state==CHASSIS_STOPPING || s.chassis.data.state==CHASSIS_FAULT);
-        CHECK(!s.chassis.data.sequence_active && !s.bus.wheels_pending);
+        CHECK(!s.chassis.pending_move_mm && !s.bus.wheels_pending);
         groups=s.groups; run(&s,2000u); CHECK(s.groups==groups);
     }
     init(&s); ready(&s); CHECK(Chassis_SetBodyVelocity(&s.chassis,50,0,0,s.now)==CHASSIS_ACCEPTED);
@@ -384,16 +385,15 @@ static void result_tests(void)
     CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_BUSY);
     groups=s.groups; s.drop_stop=0u; finish(&s,5000u);
     CHECK(s.chassis.data.state==CHASSIS_FAULT && s.groups==groups);
-    init(&s); CHECK(Chassis_StartAcceptance(&s.chassis,s.now)==CHASSIS_ACCEPTED);
-    for (t=0u;t<20000u && !s.chassis.between;++t) run(&s,1u);
-    CHECK(s.chassis.between && s.chassis.data.stage==1u);
+    init(&s); CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_ACCEPTED);
     ++s.gyro.zeros; run(&s,1u); CHECK(s.chassis.data.state==CHASSIS_STOPPING);
-    CHECK(!s.chassis.data.sequence_active); finish(&s,5000u); CHECK(s.chassis.data.result==CHASSIS_FAILED);
+    CHECK(!s.chassis.pending_move_mm); finish(&s,5000u);
+    CHECK(s.chassis.data.result==CHASSIS_FAILED && !s.groups);
     init(&s); s.reject_enable=2u; CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_ACCEPTED);
     finish(&s,6000u); CHECK(s.chassis.data.result==CHASSIS_FAILED && !s.groups);
     init(&s); s.online=7u; CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_ACCEPTED);
     run(&s,12000u); CHECK(!s.groups && s.chassis.data.state==CHASSIS_STOPPING);
-    puts("PASS: post-STOP error recheck, failure latch, unconfirmed STOP/retry, between-stage rebase, enable/missing-wheel rejection");
+    puts("PASS: post-STOP error recheck, failure latch, unconfirmed STOP/retry, preparation rebase, enable/missing-wheel rejection");
 }
 int main(void)
 {

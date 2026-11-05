@@ -20,7 +20,7 @@ void Chassis_DefaultConfig(ChassisConfig *c)
     c->position_kp=1.5f; c->heading_kp=2.0f; c->rate_damping=0.2f;
     c->position_window_mm=10.0f; c->angle_window_deg=2.0f; c->rest_rate_deg_s=3.0f;
     c->control_ms=20u; c->publish_ms=100u; c->input_lease_ms=300u;
-    c->stable_ms=200u; c->between_ms=1000u; c->driver_acceleration=100u;
+    c->stable_ms=200u; c->driver_acceleration=100u;
 }
 uint32_t Chassis_ConfigIssues(const ChassisConfig *c, uint8_t closed)
 {
@@ -44,8 +44,7 @@ uint32_t Chassis_ConfigIssues(const ChassisConfig *c, uint8_t closed)
         !positive(c->position_window_mm) || !positive(c->angle_window_deg) ||
         !positive(c->rest_rate_deg_s) || !c->control_ms || c->control_ms>100u ||
         c->publish_ms<100u || c->publish_ms>200u || c->input_lease_ms<200u ||
-        c->input_lease_ms>300u || c->stable_ms<200u || c->stable_ms>5000u ||
-        c->between_ms<1000u || c->between_ms>10000u) bad|=CHASSIS_CFG_LIMITS;
+        c->input_lease_ms>300u || c->stable_ms<200u || c->stable_ms>5000u) bad|=CHASSIS_CFG_LIMITS;
     if (closed && c->feedback_confirmed!=1u) bad|=CHASSIS_CFG_FEEDBACK;
     return bad;
 }

@@ -18,7 +18,7 @@ typedef struct {
     float acceleration_mm_s2, acceleration_deg_s2;
     float position_kp, heading_kp, rate_damping;
     float position_window_mm, angle_window_deg, rest_rate_deg_s;
-    uint32_t control_ms, publish_ms, input_lease_ms, stable_ms, between_ms;
+    uint32_t control_ms, publish_ms, input_lease_ms, stable_ms;
     int8_t motor_sign[4];
     uint8_t mechanical_confirmed, feedback_confirmed, driver_acceleration;
 } ChassisConfig;

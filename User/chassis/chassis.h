@@ -29,7 +29,7 @@ typedef struct {
     int32_t measured_rpm[4];
     uint32_t request_id, config_issues, publish_accepted, publish_rejected;
     uint32_t submitted_frames, last_submit_ms, max_submit_gap_ms, feedback_age_ms;
-    uint8_t sequence_active, stage, done, pose_valid, gyro_valid, odometry_valid, stop_pending;
+    uint8_t pose_valid, gyro_valid, odometry_valid, stop_pending;
     ChassisFault fault; /* first failure evidence; live recovery never clears it */
 } ChassisSnapshot;
 typedef struct {
@@ -40,12 +40,12 @@ typedef struct {
     ChassisOdometry odometry;
     GyroSnapshot gyro, action_gyro;
     double origin_x, origin_y, origin_angle;
-    float action_limit;
+    float action_limit, pending_move_mm; /* one straight move after asynchronous enable */
     uint32_t input_deadline, deadline, control_ms, publish_ms, stop_ms;
     uint32_t stable_since, stable_odometry_seq, stable_gyro_seq, odometry_generation;
-    uint32_t verify_ms, between_due, last_submitted, observed_frames;
+    uint32_t verify_ms, last_submitted, observed_frames;
     ChassisResult stop_result;
-    uint8_t finite, stable, verifying, between, enable_wait, have_origin;
+    uint8_t finite, stable, verifying, enable_wait, have_origin;
     uint8_t enable_index;
 } Chassis;
 void Chassis_Init(Chassis *c, MotorBus *bus, const ChassisConfig *config, uint32_t now_ms);
@@ -61,8 +61,8 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle_deg, float m
 void Chassis_Stop(Chassis *c, uint32_t now_ms);
 void Chassis_GetSnapshot(const Chassis *c, ChassisSnapshot *out);
 int Chassis_OwnsWheels(const Chassis *c);
-ChassisRequestResult Chassis_StartAcceptance(Chassis *c, uint32_t now_ms);
+/* Prepare wheels, then move once along local X; positive is forward, negative backward. */
+ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance_mm, uint32_t now_ms);
 const char *Chassis_StateName(ChassisState state);
 const char *Chassis_ReasonName(ChassisReason reason);
-const char *Chassis_StageName(uint8_t stage);
 #endif

@@ -226,7 +226,7 @@ static void home_and_acceptance(void)
     CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_ACCEPTED); id=s.mech.data.request_id;
     CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_BUSY && s.mech.data.request_id==id);
     CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_BUSY);
-    CHECK(Chassis_StartAcceptance(&s.chassis,s.now)==CHASSIS_BUSY);
+    CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_BUSY);
     CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_BUSY);
     finish(&s,45000u);
     if (s.mech.data.reason) fprintf(stderr,"test: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
