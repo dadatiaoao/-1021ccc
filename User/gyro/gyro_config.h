@@ -1,5 +1,7 @@
 #ifndef GYRO_CONFIG_H
 #define GYRO_CONFIG_H
+/* This branch is an identity-only software-I2C feasibility experiment. */
+#define GYRO_SOFT_PROBE 1
 /* WDS601M CHIP side only: PS open, CS=3V3, SA0=GND. I2C1 PB6/PB7. */
 #ifndef GYRO_ADDRESS_7BIT
 #define GYRO_ADDRESS_7BIT 0x68u

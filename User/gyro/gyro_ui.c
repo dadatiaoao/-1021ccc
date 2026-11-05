@@ -27,6 +27,19 @@ void GyroUi_Line(char t[43],unsigned row,uint8_t detail,const GyroSnapshot *d)
 {
     char a[20],b[20]; t[0]='\0';
     if (!d) { if (!row) strcpy(t,"GYRO unavailable"); return; }
+#if GYRO_SOFT_PROBE
+    switch (row) {
+    case 0u: strcpy(t,"GYRO software I2C test"); break;
+    case 1u: snprintf(t,43,"SOFT I2C ID:%02X EXPECT:47",d->who); break;
+    case 2u: snprintf(t,43,"OK:%lu TOTAL:%lu",(unsigned long)d->probe_ok,(unsigned long)d->probe_total); break;
+    case 3u: snprintf(t,43,"ERROR:%lu BADID:%lu",(unsigned long)d->errors,(unsigned long)d->probe_bad); break;
+    case 4u: snprintf(t,43,"NACK:%lu TIMEOUT:%lu",(unsigned long)d->probe_nack,(unsigned long)d->probe_timeout); break;
+    case 5u: snprintf(t,43,"BUSY:%lu LAST:%s",(unsigned long)d->probe_busy,bus_name(d->last_bus_error)); break;
+    case 6u: strcpy(t,"WHO ONLY / RESET CLEARS COUNTS"); break;
+    default: break;
+    }
+    return;
+#endif
     if (!row) { strcpy(t,detail ? "GYRO diagnostics" : "GYRO relative rotation"); return; }
     if (detail) {
         switch (row) {

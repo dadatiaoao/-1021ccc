@@ -16,6 +16,7 @@ enum { GYRO_MOTOR_NONE, GYRO_MOTOR_ACTIVE, GYRO_MOTOR_UNKNOWN, GYRO_MOTOR_STOP }
 typedef struct {
     GyroState state; GyroError error, last_fault; GyroBusError bus_error, last_bus_error;
     GyroCalibration calibration;
+    uint32_t probe_total, probe_ok, probe_nack, probe_timeout, probe_busy, probe_bad;
     int16_t raw[3];
     float raw_dps, bias_dps, rate_dps;
     double angle_deg;

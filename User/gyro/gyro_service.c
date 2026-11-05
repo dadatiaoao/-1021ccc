@@ -90,6 +90,11 @@ void Gyro_Init(GyroService *s,GyroIo io,uint32_t now)
 {
     memset(s,0,sizeof(*s)); s->io=io;
     s->data.axis=GYRO_AXIS; s->data.sign=GYRO_SIGN;
+#if GYRO_SOFT_PROBE
+    s->data.bus_error=s->io.init(s->io.ctx);
+    s->data.state=GYRO_INIT; s->due=now+GYRO_STARTUP_MS;
+    return;
+#endif
     s->retry_ms=GYRO_RETRY_MIN_MS; start(s,now);
 }
 static int fresh(const GyroService *s,uint32_t now)
@@ -235,6 +240,26 @@ static void process(GyroService *s,uint32_t now,uint8_t motor_active)
  */
 void Gyro_Process(GyroService *s,uint32_t now,uint8_t motor_active)
 {
+#if GYRO_SOFT_PROBE
+    uint8_t id=0u; GyroBusError e;
+    (void)motor_active;
+    if ((int32_t)(now-s->due)<0) return;
+    s->due=now+10u;
+    e=s->io.read(s->io.ctx,0x75u,&id,1u);
+    ++s->data.probe_total; s->data.who=id; s->data.bus_error=e;
+    s->data.state=GYRO_INIT; /* Never publish motion data from this test. */
+    if (e==GYRO_BUS_OK && id==0x47u) ++s->data.probe_ok;
+    else {
+        ++s->data.errors;
+        if (e==GYRO_BUS_OK) ++s->data.probe_bad;
+        else if (e==GYRO_BUS_NACK) ++s->data.probe_nack;
+        else if (e==GYRO_BUS_TIMEOUT) ++s->data.probe_timeout;
+        else if (e==GYRO_BUS_BUSY) ++s->data.probe_busy;
+        s->data.last_bus_error=e;
+    }
+    return;
+#endif
+
     uint32_t began=s->io.cycles(s->io.ctx),cost;
     process(s,now,motor_active);
     cost=(uint32_t)(s->io.cycles(s->io.ctx)-began)/s->io.cycles_per_us;
