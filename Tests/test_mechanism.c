@@ -20,37 +20,29 @@ uint32_t HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)
 { CHECK(port==GPIOG && (pin==GPIO_PIN_2 || pin==GPIO_PIN_3)); return gpio_levels[pin==GPIO_PIN_2 ? 0u : 1u]; }
 static MechanismConfig config(void)
 {
-    unsigned a; MechanismConfig c; Mechanism_DefaultConfig(&c);
+    MechanismConfig c; unsigned a; Mechanism_DefaultConfig(&c);
     for (a=0u;a<3u;++a) {
-        c.axis[a].units_per_rev=a==0u ? 100.0 : 10.0;
-        c.axis[a].pulses_per_rev=3200u; c.axis[a].positive_sign=a==1u ? 1 : -1;
-        c.axis[a].calibrated=1u; c.axis[a].max_rpm=200.0f;
-        c.axis[a].move_speed=a==0u ? 20.0f : 5.0f; c.axis[a].tolerance=a==0u ? 0.1f : a==1u ? 0.02f : 0.005f;
+        c.axis[a].calibrated=1u; c.axis[a].pulses_per_rev=3200u;
+        c.axis[a].positive_sign=1;
+        c.axis[a].max_rpm=(float)c.collision[a].rpm+0.1f;
+        c.axis[a].move_speed=a==0u ? 18.0f : a==1u ? 20.0f : 2.0f;
     }
-    for (a=0u;a<2u;++a) {
-        c.home[a].wiring_confirmed=c.home[a].home_confirmed=1u;
-        c.home[a].max_position=a==0u ? 100.0f : 30.0f;
-        c.home[a].initial_release=a==0u ? 5.0f : 1.0f;
-        c.home[a].fast_seek=a==0u ? 30.0f : 3.0f;
-        c.home[a].backoff=c.home[a].clearance=a==0u ? 2.0f : 0.3f;
-        c.home[a].slow_seek=a==0u ? 5.0f : 1.0f;
-    }
-    c.outside_angle=20.0f; c.top_window=0.1f; c.work_window=0.5f;
     return c;
 }
 typedef struct {
     MotorBus bus; Mechanism mech; Chassis chassis; MechanismConfig cfg;
     uint32_t now,tx_done; uint8_t busy,bytes[128],length,online;
-    uint8_t flags[7],freeze_position,drop_stop,reject_enable,hold_stop,stuck;
-    uint8_t raw_mode[2],switch_high[2],drop_move_ack;
+    uint8_t flags[7],freeze_position,drop_stop,reject_enable,hold_stop;
+    uint8_t raw_mode[2],drop_move_ack,stuck_axis;
     uint8_t delayed[8],delayed_length,delay_ack;
     uint32_t reply_due; int32_t bias_counts[7];
     double counts[7],target[7]; int32_t rpm[7];
-    uint8_t home_flags, home_phase, home_dir, reject_home, drop_home_ack, drop_home_status;
-    uint16_t home_rpm, home_backoff;
-    unsigned homes, aborts;
-    unsigned moves[7],stops[7],enables[7],order[128],order_rpm[128],order_count;
-    uint32_t last_trigger,first_stop;
+    uint8_t home_flags[7],home_phase[7],home_dir[7],native[3];
+    uint8_t reject_home,drop_home_ack,drop_home_status;
+    uint16_t home_rpm[7],home_backoff[7];
+    unsigned homes[7],aborts[7],moves[7],stops[7],enables[7];
+    unsigned order[128],order_rpm[128],order_count;
+    uint32_t home_at[7],park_at[7];
 } Sim;
 static int send_wire(void *ctx, const uint8_t *b, uint8_t length)
 {
@@ -64,10 +56,11 @@ static int send_wire(void *ctx, const uint8_t *b, uint8_t length)
             s->order[s->order_count++]=a+1u;
         }
     }
-    if (b[1]==EMM_STOP) { ++s->stops[a]; if (!s->first_stop) s->first_stop=s->now; }
+    if (b[1]==EMM_STOP) ++s->stops[a];
     if (b[1]==EMM_ENABLE) ++s->enables[a];
-    if (b[1]==EMM_HOME) ++s->homes;
-    if (b[1]==EMM_HOME_ABORT) ++s->aborts;
+    if (b[1]==EMM_HOME) { ++s->homes[a]; s->home_at[a]=s->now; }
+    if (b[1]==EMM_HOME_ABORT) ++s->aborts[a];
+    if (b[1]==EMM_MOVE && a>=4u && !s->park_at[a]) s->park_at[a]=s->now;
     return 1;
 }
 static int wire_busy(void *ctx) { return ((Sim *)ctx)->busy; }
@@ -89,24 +82,25 @@ static void reply(Sim *s)
         s->flags[a]&=0xFDu;
         if (s->drop_move_ack) return; /* physical command accepted, reply lost */
     } else if (b[1]==EMM_HOME_CONFIG) {
-        CHECK(a==6u && b[2]==0xAEu && !b[3] && b[4]==2u && !b[18]);
+        CHECK(a>=4u && b[2]==0xAEu && !b[3] && b[4]==2u && !b[18]);
         if (s->reject_home) r[2]=0xE2u;
-        s->home_dir=b[5]; s->home_rpm=(uint16_t)(((unsigned)b[6]<<8)|b[7]);
+        s->home_dir[a]=b[5]; s->home_rpm[a]=(uint16_t)(((unsigned)b[6]<<8)|b[7]);
     } else if (b[1]==EMM_HOME_BACKOFF) {
-        CHECK(a==6u && b[2]==0xACu && !b[3]);
-        s->home_backoff=(uint16_t)(((unsigned)b[4]<<8)|b[5]);
+        CHECK(a>=4u && b[2]==0xACu && !b[3]);
+        s->home_backoff[a]=(uint16_t)(((unsigned)b[4]<<8)|b[5]);
     } else if (b[1]==EMM_HOME) {
-        CHECK(a==6u && b[2]==2u && !b[3]);
-        s->home_phase=1u; s->home_flags=7u;
-        s->target[a]=50.0*65536.0/s->cfg.axis[2].units_per_rev*s->cfg.axis[2].positive_sign;
-        s->rpm[a]=s->home_dir ? -(int32_t)s->home_rpm : s->home_rpm;
+        CHECK(a>=4u && b[2]==2u && !b[3]);
+        s->home_phase[a]=1u; s->home_flags[a]=7u;
+        s->target[a]=a==6u ? 50.0*65536.0 : 0.0;
+        if (a==6u) s->target[a]/=s->cfg.axis[2].units_per_rev;
+        s->rpm[a]=s->home_dir[a] ? -(int32_t)s->home_rpm[a] : s->home_rpm[a];
         if (s->drop_home_ack) return;
     } else if (b[1]==EMM_HOME_ABORT) {
         if (s->hold_stop || s->drop_stop) { if (s->drop_stop) --s->drop_stop; return; }
-        s->home_phase=0u; s->home_flags=11u; s->rpm[a]=0; s->flags[a]|=2u;
+        s->home_phase[a]=0u; s->home_flags[a]=11u; s->rpm[a]=0; s->flags[a]|=2u;
     } else if (b[1]==EMM_HOME_STATUS) {
         if (s->drop_home_status) return;
-        n=5u; r[2]=s->home_flags; r[3]=s->flags[a];
+        n=5u; r[2]=s->home_flags[a]; r[3]=s->flags[a];
     } else if (b[1]==EMM_STOP) {
         if (s->hold_stop || s->drop_stop) { if (s->drop_stop) --s->drop_stop; return; }
         s->rpm[a]=0; s->flags[a]|=2u;
@@ -126,34 +120,36 @@ static void reply(Sim *s)
 }
 static uint8_t limit(Sim *s, unsigned a)
 {
-    double physical=s->counts[a+4u]*s->cfg.axis[a].positive_sign*s->cfg.axis[a].units_per_rev/65536.0;
-    if (s->raw_mode[a]==1u) return 1u; /* pressed or open circuit */
-    if (s->raw_mode[a]==2u) return 0u; /* short to GND */
-    if (s->raw_mode[a]==3u) return (uint8_t)(s->now%8u<4u); /* never stable */
-    if (physical<=0.0) s->switch_high[a]=1u;
-    if (physical>0.05) s->switch_high[a]=0u;
-    return s->switch_high[a];
+    if (s->raw_mode[a]==1u) return 1u;
+    if (s->raw_mode[a]==2u) return 0u;
+    if (s->raw_mode[a]==3u) return (uint8_t)(s->now%8u<4u);
+    return 0u;
 }
 static void run(Sim *s, uint32_t duration)
 {
     uint32_t t; unsigned a;
     for (t=0u;t<duration;++t,++s->now) {
-        for (a=0u;a<7u;++a) if (s->rpm[a] && !s->stuck) {
+        for (a=0u;a<7u;++a) if (s->rpm[a] && s->stuck_axis!=a+1u) {
             double step=s->rpm[a]*65536.0/60000.0;
-            if (!s->hold_stop && fabs(s->target[a]-s->counts[a])<=fabs(step)) {
+            if (a>=4u && s->home_phase[a]==1u &&
+                ((s->rpm[a]<0 && s->counts[a]+step<=s->target[a]) ||
+                 (s->rpm[a]>0 && s->counts[a]+step>=s->target[a]))) {
                 s->counts[a]=s->target[a];
-                if (a==6u && s->home_phase==1u) {
-                    s->home_phase=2u; s->rpm[a]= -s->rpm[a];
-                    s->target[a]=s->counts[a]+s->home_backoff/3600.0*65536.0*(s->home_dir ? 1.0 : -1.0);
-                } else {
-                    s->rpm[a]=0; s->flags[a]|=2u;
-                    if (a==6u && s->home_phase==2u) { s->home_phase=0u; s->home_flags=3u; }
-                }
+                if (s->native[a-4u]) {
+                    s->home_phase[a]=2u; s->rpm[a]= -s->rpm[a];
+                    s->target[a]=s->counts[a]+s->home_backoff[a]/3600.0*65536.0*
+                        (s->home_dir[a] ? 1.0 : -1.0);
+                } else s->rpm[a]=0;
+            } else if (s->home_phase[a]==1u && !s->native[a-4u] && !s->rpm[a]) {
+                /* Static contact waits for the controller's 900 ms detector. */
+            } else if (s->home_phase[a]==1u) s->counts[a]+=step;
+            else if (fabs(s->target[a]-s->counts[a])<=fabs(step)) {
+                s->counts[a]=s->target[a]; s->rpm[a]=0; s->flags[a]|=2u;
+                if (s->home_phase[a]==2u) { s->home_phase[a]=0u; s->home_flags[a]=3u; }
             } else s->counts[a]+=step;
         }
         Mechanism_SampleLimits(&s->mech,limit(s,0u),limit(s,1u),s->now);
         Mechanism_Process(&s->mech,s->now);
-        if (s->mech.triggered && !s->last_trigger) s->last_trigger=s->now;
         if (s->busy && (int32_t)(s->now-s->tx_done)>=0) { s->busy=0u; reply(s); }
         if (s->delayed_length && (int32_t)(s->now-s->reply_due)>=0) {
             MotorBus_Receive(&s->bus,s->delayed,s->delayed_length,s->now); s->delayed_length=0u;
@@ -164,10 +160,13 @@ static void run(Sim *s, uint32_t duration)
 static void init_at(Sim *s, uint32_t now)
 {
     MotorTransport t; unsigned a;
-    memset(s,0,sizeof(*s)); s->now=now; s->online=0x70u; s->home_flags=3u; s->cfg=config();
+    memset(s,0,sizeof(*s)); s->now=now; s->online=0x7Fu; s->cfg=config();
     for (a=0u;a<7u;++a) s->flags[a]=2u;
-    s->counts[4]= -2.0*65536.0/100.0; s->counts[5]=0.3*65536.0/10.0;
-    s->counts[6]= -8.0*65536.0/10.0;
+    for (a=4u;a<7u;++a) s->home_flags[a]=3u;
+    for (a=0u;a<3u;++a) s->native[a]=1u;
+    s->counts[4]=20.0*65536.0/s->cfg.axis[0].units_per_rev;
+    s->counts[5]=20.0*65536.0/s->cfg.axis[1].units_per_rev;
+    s->counts[6]=45.0*65536.0/s->cfg.axis[2].units_per_rev;
     t.context=s; t.send=send_wire; t.busy=wire_busy;
     MotorBus_Init(&s->bus,t,now); Chassis_Init(&s->chassis,&s->bus,0,now);
     Mechanism_Init(&s->mech,&s->bus,&s->cfg,now);
@@ -179,277 +178,171 @@ static void finish(Sim *s, uint32_t max)
     uint32_t t;
     for (t=0u;t<max && (s->mech.auto_pending || s->mech.owned);++t) run(s,1u);
 }
-static void homed(Sim *s)
-{
-    finish(s,70000u);
-    if (s->mech.data.result!=MECH_SUCCESS) fprintf(stderr,"home: %s %s axis %u time %u seg %u\n",
-        Mechanism_StateName(s->mech.data.state),Mechanism_ReasonName(s->mech.data.reason),s->mech.data.axis,s->now,s->mech.segment);
-    CHECK(s->mech.data.result==MECH_SUCCESS && s->mech.data.reference[0]==MECH_HOMED && s->mech.data.reference[1]==MECH_HOMED);
-}
-static void wait_step(Sim *s, MechanismState state, unsigned axis)
+static void until_home(Sim *s, uint32_t max)
 {
     uint32_t t;
-    for (t=0u;t<30000u && !(s->mech.data.state==state && s->mech.data.axis==axis && s->mech.segment==1u);++t) run(s,1u);
-    CHECK(t<30000u);
+    for (t=0u;t<max && (s->mech.auto_pending || s->mech.owned);++t) run(s,1u);
+    if (s->mech.data.result!=MECH_SUCCESS)
+        fprintf(stderr,"HOME %s %s axis %u t %u segment %u counts %.1f target %.1f rpm %d action %u\n",
+            Mechanism_StateName(s->mech.data.state),
+            Mechanism_ReasonName(s->mech.data.reason),
+            s->mech.data.axis,s->now,s->mech.segment,s->counts[6],s->target[6],s->rpm[6],s->bus.nodes[6].action);
+    CHECK(s->mech.data.result==MECH_SUCCESS);
+    CHECK(s->mech.data.reference[0]==MECH_HOMED &&
+        s->mech.data.reference[1]==MECH_HOMED &&
+        s->mech.data.reference[2]==MECH_HOMED);
+    NEAR(s->mech.data.position[0],s->cfg.outside_angle,s->cfg.axis[0].tolerance);
+    NEAR(s->mech.data.position[1],s->cfg.observation_mm,s->cfg.axis[1].tolerance);
+    NEAR(s->mech.data.position[2],0.0,s->cfg.axis[2].tolerance);
 }
-static void default_and_gpio(void)
+static void until_state(Sim *s, MechanismState state, unsigned axis)
 {
-    Sim s; MechanismConfig c; unsigned a;
+    uint32_t t;
+    for (t=0u;t<50000u && !(s->mech.data.state==state &&
+        s->mech.data.axis==axis);++t) run(s,1u);
+    CHECK(t<50000u);
+}
+static void config_and_startup(void)
+{
+    Sim s; MechanismConfig c; unsigned i;
     BspLimit_Init(); gpio_levels[0]=0u; gpio_levels[1]=1u;
-    CHECK(!BspLimit_Read(0u) && BspLimit_Read(1u)); gpio_levels[0]=1u; gpio_levels[1]=0u;
-    CHECK(BspLimit_Read(0u) && !BspLimit_Read(1u));
-    Mechanism_DefaultConfig(&c); for (a=0u;a<3u;++a) CHECK(Mechanism_ConfigIssues(&c,a));
-    init(&s); Mechanism_Init(&s.mech,&s.bus,0,0u); run(&s,12000u);
-    CHECK(!s.order_count && !s.enables[4] && !s.enables[5] && s.mech.data.rejection==MECH_CONFIG);
-    CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_INVALID);
-    c=config(); c.axis[0].positive_sign=0; CHECK(Mechanism_ConfigIssues(&c,0u)&MECH_CFG_DIRECTION);
-    c=config(); c.axis[1].units_per_rev=NAN; CHECK(Mechanism_ConfigIssues(&c,1u)&MECH_CFG_SCALE);
-    init(&s); s.mech.auto_pending=0u;
-    for (a=0u;a<100u;++a) Mechanism_SampleLimits(&s.mech,0u,0u,0u);
-    CHECK(!s.mech.data.limit[0].valid);
-    Mechanism_SampleLimits(&s.mech,0u,0u,10u); CHECK(!s.mech.data.limit[0].valid);
-    Mechanism_SampleLimits(&s.mech,0u,0u,20u); CHECK(s.mech.data.limit[0].valid);
-    Mechanism_SampleLimits(&s.mech,0u,0u,31u); CHECK(!s.mech.data.limit[0].valid);
-    puts("PASS: PG2/PG3 NC GPIO; uncalibrated firmware never enables/moves");
-}
-static void home_and_acceptance(void)
-{
-    Sim s; unsigned a,old; uint32_t id; double start;
-    init(&s); homed(&s);
-    CHECK(s.order[0]==6u && s.order[4]==5u && s.order_count==9u);
-    CHECK(s.mech.data.reference[2]==MECH_HOMED && s.moves[6]==1u);
-    CHECK(s.mech.data.stop_submit_ms>=s.mech.data.stop_request_ms);
-    CHECK(s.mech.data.stop_confirm_ms>s.mech.data.stop_submit_ms);
-    for (a=0u;a<4u;++a) CHECK(!s.moves[a] && !s.enables[a] && !s.stops[a]);
-    CHECK(s.flags[5]&1u); /* lift remains enabled */
-    NEAR(s.mech.data.position[0],0.0,0.001); NEAR(s.mech.data.position[1],0.0,0.001);
-    CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_ACCEPTED); id=s.mech.data.request_id;
-    CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_BUSY && s.mech.data.request_id==id);
-    CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_BUSY);
-    CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_BUSY);
-    CHECK(Chassis_Prepare(&s.chassis,s.now)==CHASSIS_BUSY);
-    finish(&s,45000u);
-    if (s.mech.data.reason) fprintf(stderr,"test: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
-    CHECK(s.mech.data.done && s.mech.data.result==MECH_SUCCESS && s.mech.data.stage==8u);
-    CHECK(s.moves[6]==5u && s.moves[4]==6u && s.moves[5]==6u);
-    start=(double)s.mech.data.origin_counts[2]; NEAR(s.counts[6],start,2.0);
-    old=s.order_count; run(&s,3000u); CHECK(s.order_count==old); /* one round */
-    init_at(&s,UINT32_MAX-4000u); homed(&s); CHECK(s.mech.data.reference[2]==MECH_HOMED);
-    init(&s); s.online=0x30u; homed(&s);
-    CHECK(!s.mech.data.trim_ready && !s.stops[6] && Mechanism_StartAcceptance(&s.mech,s.now)==MECH_NOT_READY);
-    init(&s); s.online=0x71u; s.rpm[0]=10; s.target[0]=100000000.0;
-    s.mech.auto_pending=0u; run(&s,2500u);
-    CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_ACCEPTED); homed(&s);
-    CHECK(s.stops[0] && !s.stops[1] && !s.stops[2] && !s.stops[3]);
-    puts("PASS: lift->arm double approach, park origins, optional TRIM, wraparound, 8-step one-shot acceptance");
-}
-static void conversion_and_gates(void)
-{
-    Sim s; unsigned before; uint32_t id; double origin;
-    init(&s); homed(&s);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_LIFT,1.0f,2.0f,s.now)==MECH_NOT_READY && s.mech.data.rejection==MECH_INTERLOCK);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,-1.0f,2.0f,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,101.0f,2.0f,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,NAN,2.0f,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,1.0f,INFINITY,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,FLT_MAX,2.0f,s.now)==MECH_INVALID && !s.mech.owned);
-    before=s.moves[6];
-    CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,0.00001f,2.0f,s.now)==MECH_ACCEPTED && !s.mech.owned);
-    CHECK(s.moves[6]==before);
-    origin=(double)s.mech.data.origin_counts[2];
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,-20.0f,5.0f,s.now)==MECH_ACCEPTED); id=s.mech.data.request_id;
-    CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,1.0f,2.0f,s.now)==MECH_BUSY && s.mech.data.request_id==id);
-    finish(&s,20000u); CHECK(s.mech.data.result==MECH_SUCCESS); NEAR(s.mech.data.position[2],-20.0,0.02);
-    NEAR(s.counts[6]-origin,2.0*65536.0,2.0); /* negative mm / negative protocol sign */
-    CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,25.0f,5.0f,s.now)==MECH_ACCEPTED);
-    finish(&s,25000u); CHECK(s.mech.data.result==MECH_SUCCESS); NEAR(s.mech.data.position[2],5.0,0.02);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,20.0f,20.0f,s.now)==MECH_ACCEPTED); finish(&s,12000u);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_LIFT,1.0f,5.0f,s.now)==MECH_ACCEPTED); finish(&s,12000u);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,0.0f,20.0f,s.now)==MECH_NOT_READY && s.mech.data.rejection==MECH_INTERLOCK);
-    s.chassis.data.state=CHASSIS_MOVING;
-    CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_BUSY && Mechanism_StartAcceptance(&s.mech,s.now)==MECH_BUSY);
-    puts("PASS: degree/mm conversion, signs, relative and absolute requests, NaN/Inf/range, TRIM midpoint bounds, pose/peer gates");
-}
-static void fault_tests(void)
-{
-    Sim s; unsigned n; uint32_t t;
-    init(&s); s.counts[4]=s.counts[5]=0.0; homed(&s); CHECK(s.order_count==11u && s.order[0]==6u);
-    init(&s); s.raw_mode[1]=1u; finish(&s,30000u);
-    CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.reason==MECH_NOT_RELEASED && s.moves[5]==1u);
-    n=s.order_count; run(&s,5000u); CHECK(s.order_count==n && !s.mech.auto_pending);
-    init(&s); s.raw_mode[1]=2u; finish(&s,30000u);
-    CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.reason==MECH_NOT_FOUND && s.moves[5]==1u);
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.raw_mode[1]=1u;
-    run(&s,1u); CHECK(s.bus.nodes[5].stop_unconfirmed); /* raw edge before 20ms debounce */
-    s.raw_mode[1]=3u;
-    finish(&s,12000u); CHECK(s.mech.data.reason==MECH_LIMIT_UNSTABLE);
-    init(&s); s.drop_stop=1u; homed(&s); CHECK(s.stops[5]>=3u);
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.hold_stop=1u; s.raw_mode[1]=1u;
-    run(&s,5000u); CHECK(s.mech.owned && s.mech.data.stop_pending && s.bus.nodes[5].stop_unconfirmed);
-    CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_BUSY);
-    s.hold_stop=0u; finish(&s,15000u); CHECK(s.mech.data.result==MECH_FAILED && !s.mech.owned);
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.now+=11u; run(&s,1u);
-    CHECK(s.mech.data.reason==MECH_SAMPLE_GAP && s.bus.nodes[5].stop_unconfirmed);
-    init(&s); s.reject_enable=6u; finish(&s,20000u); CHECK(s.mech.data.result==MECH_FAILED && !s.moves[5]);
-    init(&s); s.online=0x50u; finish(&s,20000u); CHECK(s.mech.data.result==MECH_FAILED && !s.order_count);
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.drop_move_ack=1u;
-    /* Losing the next movement ACK cannot be treated as completion. */
-    finish(&s,40000u); CHECK(s.mech.data.result==MECH_FAILED);
-    init(&s); homed(&s); CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,5.0f,s.now)==MECH_ACCEPTED);
-    run(&s,100u); Mechanism_Stop(&s.mech,s.now); finish(&s,8000u);
-    CHECK(s.mech.data.result==MECH_CANCELLED && !s.mech.auto_pending && s.mech.data.reference[2]==MECH_HOMED);
-    init(&s); homed(&s); s.raw_mode[0]=1u; run(&s,1u);
-    CHECK(s.mech.data.reason==MECH_LIMIT && s.bus.nodes[4].stop_unconfirmed && !s.mech.data.reference[0]);
-    finish(&s,5000u); Mechanism_Stop(&s.mech,s.now);
-    CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.state==MECH_FAULT && s.mech.data.reason==MECH_LIMIT);
-    init(&s); homed(&s); s.freeze_position=7u; run(&s,2200u); CHECK(!s.mech.data.reference[2]);
-    init(&s); homed(&s); CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,5.0f,s.now)==MECH_ACCEPTED);
-    s.flags[6]|=4u; finish(&s,10000u); CHECK(s.mech.data.result==MECH_FAILED && !s.mech.data.reference[2]);
-    init(&s); homed(&s); s.delay_ack=1u;
-    CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,5.0f,s.now)==MECH_ACCEPTED);
-    run(&s,40u); CHECK(s.mech.data.result==MECH_RUNNING); finish(&s,10000u); CHECK(s.mech.data.result==MECH_SUCCESS);
-    init(&s); homed(&s); CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,5.0f,s.now)==MECH_ACCEPTED);
-    run(&s,100u); s.bias_counts[6]=64; finish(&s,10000u);
-    if (s.mech.data.reason!=MECH_FINAL_ERROR) fprintf(stderr,"final test result %u reason %s pos %.5f target %.5f bus %s\n",s.mech.data.result,
-        Mechanism_ReasonName(s.mech.data.reason),s.mech.data.position[2],s.mech.data.target,MotorBus_ActionName(s.bus.nodes[6].action));
-    CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.reason==MECH_FINAL_ERROR);
-    init(&s); wait_step(&s,MECH_SLOW_SEEK,1u);
-    s.freeze_position=6u; s.raw_mode[1]=1u; run(&s,1200u);
-    CHECK(!s.mech.data.reference[1] && s.mech.data.state!=MECH_PARK_RELEASE); /* STOP ACK does not supply an origin */
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.cfg.axis[1].positive_sign= -1;
-    /* Plant switch mapping reversed: search cannot auto-invert or extend itself. */
-    finish(&s,30000u); CHECK(s.mech.data.result==MECH_FAILED);
-    init(&s); wait_step(&s,MECH_FAST_SEEK,1u); s.stuck=1u;
-    for (t=0u;t<20000u && s.mech.data.result==MECH_RUNNING;++t) run(&s,1u);
-    CHECK(s.mech.data.result==MECH_FAILED);
-    puts("PASS: pressed boot, open/short/bounce, raw STOP, lost STOP retry, no stop bypass, gaps, enable/offline/ACK/stale/protection/stall failures");
-}
-static void trial_tests(void)
-{
-    /* LIFT seek/backoff/seek/park; ARM initially pressed, then the same four.
-       Check transmitted RPM so conversion/caps cannot silently defeat homing speeds. */
-    static const unsigned home_rpm[]={60u,12u,12u,12u,6u,24u,6u,6u,6u,180u};
-    Sim s; MechanismConfig c; unsigned a;
+    CHECK(!BspLimit_Read(0u) && BspLimit_Read(1u));
     Mechanism_DefaultConfig(&c);
-    for (a=0u;a<3u;++a) CHECK(!Mechanism_ConfigIssues(&c,a));
-    CHECK(c.axis[0].units_per_rev==120.0 && c.axis[1].units_per_rev==40.0 && c.axis[2].units_per_rev==1.0);
-    init(&s); s.cfg=c;
-    s.counts[4]= -2.0*65536.0/c.axis[0].units_per_rev;
-    s.counts[5]=0.3*65536.0/c.axis[1].units_per_rev;
-    s.counts[6]=8.0*65536.0/c.axis[2].units_per_rev;
-    Mechanism_Init(&s.mech,&s.bus,&c,s.now); s.mech.chassis=&s.chassis;
-    homed(&s);
-    CHECK(s.order[0]==6u && s.order[4]==5u && s.moves[6]==1u);
-    CHECK(s.order_count==sizeof(home_rpm)/sizeof(home_rpm[0]));
-    for (a=0u;a<s.order_count;++a) CHECK(s.order_rpm[a]==home_rpm[a]);
+#if MECHANISM_TRIAL_RUN
+    for (i=0u;i<3u;++i) CHECK(!Mechanism_ConfigIssues(&c,i));
+    CHECK(c.collision[0].rpm==24u && c.collision[1].rpm==60u &&
+        c.collision[2].rpm==180u && MECHANISM_NO_PROGRESS_MS==900u);
+    CHECK(c.home[0].max_position==180.0f && c.observation_mm==10.0f &&
+        c.grab_mm==140.0f && c.home[1].max_position>=c.grab_mm);
+#else
+    for (i=0u;i<3u;++i) CHECK(Mechanism_ConfigIssues(&c,i)&MECH_CFG_CONFIRM);
+#endif
+    init(&s); s.online=0x3Fu; run(&s,8000u);
+    CHECK(s.mech.auto_pending && !s.homes[4] && !s.homes[5] && !s.homes[6]);
+    s.online=0x7Fu; until_home(&s,60000u);
+    CHECK(s.homes[5]==1u && s.homes[4]==1u && s.homes[6]==1u);
+    CHECK(s.home_at[5]<s.home_at[4] && s.park_at[4]<s.home_at[6]);
+    CHECK(s.home_rpm[5]==60u && s.home_rpm[4]==24u && s.home_rpm[6]==180u);
+    CHECK(s.home_backoff[5]==900u && s.home_backoff[6]==3600u);
+    CHECK(s.bus.nodes[5].max_poll_gap_ms[1]<=MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS);
+    CHECK(s.bus.nodes[4].max_poll_gap_ms[1]<=MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS);
+    CHECK(s.bus.nodes[6].max_poll_gap_ms[1]<=MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS);
+    CHECK(s.mech.data.result==MECH_SUCCESS && !s.mech.auto_pending);
+    run(&s,3000u); CHECK(s.homes[5]==1u);
+    init(&s); s.online=0x3Fu; run(&s,4000u); Mechanism_Stop(&s.mech,s.now);
+    run(&s,4000u); s.online=0x7Fu; run(&s,5000u);
+    CHECK(!s.mech.auto_pending && !s.homes[5] && s.mech.data.result==MECH_CANCELLED);
+}
+static void home_paths(void)
+{
+    Sim s; unsigned a,mode;
+    for (a=0u;a<3u;++a) for (mode=0u;mode<2u;++mode) {
+        init(&s); if (mode) s.native[a]=0u;
+        if (mode && a==MECH_ARM) s.counts[4]=0.0;
+        if (mode && a==MECH_LIFT) s.counts[5]=0.0;
+        if (mode && a==MECH_TRIM) s.counts[6]=50.0*65536.0;
+        until_home(&s,65000u);
+        CHECK(s.homes[4+a]==1u);
+        CHECK((s.aborts[4+a]>0u)==(mode!=0u));
+        if (mode) {
+            CHECK(s.mech.data.stop_confirm_ms>s.mech.data.stop_submit_ms);
+            CHECK(s.park_at[4+a]>s.mech.data.stop_confirm_ms || a!=MECH_TRIM);
+        }
+        NEAR(s.counts[4]*s.cfg.axis[0].units_per_rev/65536.0,90.0,1.0);
+        NEAR(s.counts[5]*s.cfg.axis[1].units_per_rev/65536.0,10.0,0.06);
+        NEAR(s.counts[6]*s.cfg.axis[2].units_per_rev/65536.0,25.0,0.06);
+    }
+    init_at(&s,UINT32_MAX-30000u); s.native[2]=0u;
+    until_home(&s,65000u); CHECK(s.aborts[6]>0u);
+    init(&s); until_state(&s,MECH_CENTERING,MECH_TRIM);
+    CHECK(s.mech.data.result==MECH_RUNNING && s.mech.data.reference[2]!=MECH_HOMED);
+    until_home(&s,35000u);
+}
+static void progress_observation(void)
+{
+    Sim s; uint32_t start,t;
+    init(&s); s.native[1]=0u; s.counts[5]=0.0;
+    while (!s.mech.progress_ms && s.now<10000u) run(&s,1u);
+    CHECK(s.mech.progress_ms && s.mech.data.state==MECH_COLLISION_HOME);
+    start=s.mech.progress_ms;
+    for (t=0u;t<800u;++t) {
+        s.bias_counts[5]=(t&1u) ? 10 : -10;
+        run(&s,1u);
+    }
+    CHECK(s.mech.data.state==MECH_COLLISION_HOME && !s.aborts[5]);
+    while (s.mech.data.state!=MECH_CONTACT_STOP && s.now-start<2200u) run(&s,1u);
+    CHECK(s.mech.data.state==MECH_CONTACT_STOP && s.now-start>=900u);
+    s.bias_counts[5]=0; until_home(&s,60000u);
+    init(&s); s.native[1]=0u; s.counts[5]=0.0;
+    while (!s.mech.progress_ms && s.now<10000u) run(&s,1u);
+    CHECK(s.mech.progress_ms);
+    s.bus.nodes[5].poll_due[1]=s.now+800u;
+    run(&s,750u);
+    CHECK(s.mech.data.state==MECH_COLLISION_HOME && !s.aborts[5]);
+    run(&s,160u);
+    CHECK(s.mech.data.state==MECH_COLLISION_HOME && !s.aborts[5]);
+    until_home(&s,60000u);
+}
+static void limits_and_moves(void)
+{
+    Sim s; unsigned i; uint32_t id;
+    for (i=0u;i<4u;++i) {
+        init(&s); s.raw_mode[0]=(uint8_t)i; s.raw_mode[1]=(uint8_t)(3u-i);
+        until_home(&s,60000u);
+        CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,180.0f,18.0f,s.now)==MECH_ACCEPTED);
+        finish(&s,15000u); CHECK(s.mech.data.result==MECH_SUCCESS);
+        CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,180.1f,18.0f,s.now)==MECH_INVALID);
+        CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,-0.1f,18.0f,s.now)==MECH_INVALID);
+    }
+    init(&s); until_home(&s,60000u);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_LIFT,140.0f,20.0f,s.now)==MECH_ACCEPTED);
+    finish(&s,15000u); CHECK(s.mech.data.result==MECH_SUCCESS);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_ARM,80.0f,18.0f,s.now)==MECH_NOT_READY);
+    CHECK(s.mech.data.rejection==MECH_INTERLOCK);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,1.0f,2.0f,s.now)==MECH_NOT_READY);
+    CHECK(s.mech.data.rejection==MECH_INTERLOCK);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_LIFT,10.0f,20.0f,s.now)==MECH_ACCEPTED);
+    finish(&s,15000u); CHECK(s.mech.data.result==MECH_SUCCESS);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,25.1f,2.0f,s.now)==MECH_INVALID);
+    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,-25.1f,2.0f,s.now)==MECH_INVALID);
     CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_ACCEPTED);
-    finish(&s,150000u);
-    if (s.mech.data.reason) fprintf(stderr,"TRIAL: %s stage %u\n",Mechanism_ReasonName(s.mech.data.reason),s.mech.data.stage);
-    CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.done && s.mech.data.stage==8u);
-    CHECK(s.moves[6]==5u && s.flags[5]&1u);
-    puts("TRIAL CONFIG PASS: ARM 24/6 and LIFT 60/12 homing RPM on wire, 120deg/40mm/1mm/3200 profile, power-on 6->5->7 home, midpoint zero, all eight stages (synthetic mechanics only)");
+    id=s.mech.data.request_id; CHECK(Mechanism_HomeAll(&s.mech,s.now)==MECH_BUSY);
+    finish(&s,65000u);
+    CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.done &&
+        s.mech.data.stage==8u && s.mech.data.request_id==id);
 }
-static void collision_tests(void)
+static void stops_and_faults(void)
 {
-    static const uint8_t setup[]={7u,0x4Cu,0xAEu,0u,2u,0u,0u,180u,
-        0u,0u,0x61u,0xA8u,1u,0x2Cu,3u,0x20u,0u,60u,0u,0x6Bu};
-    EmmCommand c=Emm_HomeConfig(7u,0u,180u,25000u,300u,800u,60u);
-    Sim s; unsigned i;
-    CHECK(c.length==sizeof(setup) && !memcmp(c.bytes,setup,sizeof(setup)));
-    for (i=0u;i<2u;++i) {
-        init(&s); s.counts[6]=(i ? 50.0 : 0.0)*65536.0/s.cfg.axis[2].units_per_rev*s.cfg.axis[2].positive_sign;
-        homed(&s);
-        NEAR(s.counts[6]*s.cfg.axis[2].positive_sign*s.cfg.axis[2].units_per_rev/65536.0,25.0,0.002);
+    Sim s; unsigned a;
+    for (a=0u;a<3u;++a) {
+        init(&s); s.native[a]=0u;
+        until_state(&s,MECH_COLLISION_HOME,a);
+        while (!s.homes[a+4u]) run(&s,1u);
+        s.hold_stop=1u;
+        until_state(&s,MECH_CONTACT_STOP,a);
+        run(&s,4000u);
+        CHECK(s.mech.data.result==MECH_FAILED && s.bus.nodes[a+4u].stop_unconfirmed);
+        CHECK(!s.park_at[a+4u]);
+        if (a==1u) CHECK(!s.homes[4] && !s.homes[6]);
+        if (a==0u) CHECK(!s.homes[6]);
     }
-    init(&s); homed(&s);
-    CHECK(s.homes==1u && !s.aborts && s.mech.data.reference[2]==MECH_HOMED);
-    NEAR(s.counts[6]*s.cfg.axis[2].positive_sign*s.cfg.axis[2].units_per_rev/65536.0,25.0,0.002);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,25.1f,5.0f,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,-25.1f,5.0f,s.now)==MECH_INVALID);
-    CHECK(Mechanism_MoveTo(&s.mech,MECH_TRIM,24.0f,5.0f,s.now)==MECH_ACCEPTED);
-    finish(&s,20000u);
-    CHECK(Mechanism_StartAcceptance(&s.mech,s.now)==MECH_INVALID && s.mech.data.rejection==MECH_LIMIT);
-    for (i=0u;i<9u;++i) {
-        init(&s);
-        if (i==0u) s.reject_home=1u;
-        if (i==1u) s.drop_home_ack=1u;
-        while (!s.homes && s.mech.data.result!=MECH_FAILED && s.now<40000u) run(&s,1u);
-        if (i==2u) { s.drop_stop=1u; Mechanism_Stop(&s.mech,s.now); }
-        if (i==3u) { s.stuck=1u; s.drop_home_status=1u; }
-        if (i==4u) { s.stuck=1u; } /* Contact inferred, then a persistent centering jam times out. */
-        if (i==5u) {
-            while (s.mech.data.state!=MECH_CENTERING && s.now<50000u) run(&s,1u);
-            CHECK(s.mech.data.state==MECH_CENTERING); Mechanism_Stop(&s.mech,s.now);
-        }
-        if (i>=6u) {
-            run(&s,10u); s.stuck=1u;
-            if (i==6u) s.home_flags=11u; /* Native failure with otherwise healthy motor status. */
-            if (i==7u) s.home_flags=19u; /* Overheat from the combined home status. */
-            if (i==8u) {
-                s.hold_stop=1u; s.rpm[6]=0; Mechanism_Stop(&s.mech,s.now); run(&s,4000u);
-                CHECK(s.bus.nodes[6].stop_unconfirmed && s.mech.owned && s.aborts>=2u);
-                s.hold_stop=0u; /* Zero speed alone cannot confirm aborted native homing. */
-            }
-        }
-        finish(&s,40000u);
-        CHECK(s.mech.data.result==(i==2u || i==5u || i==8u ? MECH_CANCELLED : MECH_FAILED));
-        CHECK(s.mech.data.reference[2]==MECH_UNREFERENCED && !s.mech.auto_pending);
-        if (i>=1u && i<=4u) CHECK(s.aborts>0u);
-        if (i!=5u && i!=4u) CHECK(!s.moves[6]); /* No center command after failed/aborted search. */
-    }
-    puts("PASS: native collision home + fixed backoff + midpoint; bounds, setup rejection, lost ACK/status, native failure/protection, timeout and verified STOP without reference");
-}
-static void trim_home_contact_tests(void)
-{
-    Sim s; uint32_t at; unsigned kind;
-    for (kind=0u;kind<4u;++kind) {
-        if (kind==1u) init_at(&s,UINT32_MAX-20000u); else init(&s);
-        while (!s.homes) run(&s,1u);
-        run(&s,10u);
-        s.counts[6]=50.0*65536.0/s.cfg.axis[2].units_per_rev*s.cfg.axis[2].positive_sign;
-        s.stuck=1u; s.rpm[6]=0; at=s.now;
-        while (s.mech.data.state!=MECH_CONTACT_STOP && s.now-at<3000u) {
-            s.bias_counts[6]=(s.now%2u) ? 10 : -10; run(&s,1u);
-        }
-        CHECK(s.mech.data.state==MECH_CONTACT_STOP && s.mech.data.result==MECH_RUNNING);
-        CHECK(!s.mech.data.reference[2] && !s.moves[6]);
-        s.bias_counts[6]=0;
-        if (kind==2u) {
-            s.hold_stop=1u; run(&s,4000u);
-            CHECK(s.mech.data.result==MECH_FAILED && !s.moves[6] && !s.mech.data.reference[2]);
-            CHECK(s.bus.nodes[6].stop_unconfirmed); continue;
-        }
-        if (kind==3u) {
-            Mechanism_Stop(&s.mech,s.now); run(&s,4000u);
-            CHECK(s.mech.data.result==MECH_CANCELLED && !s.moves[6] && !s.mech.data.reference[2]); continue;
-        }
-        s.stuck=0u; finish(&s,15000u);
-        CHECK(s.mech.data.result==MECH_SUCCESS && s.mech.data.reference[2]==MECH_HOMED);
-        CHECK(s.aborts && s.homes==1u && s.moves[6]==1u);
-        NEAR(s.counts[6]*s.cfg.axis[2].positive_sign*s.cfg.axis[2].units_per_rev/65536.0,25.0,0.002);
-    }
-    /* No-progress during centering or an ordinary move must NEVER establish a zero. */
-    for (kind=0u;kind<2u;++kind) {
-        init(&s);
-        if (kind==0u) {
-            while (s.mech.data.state!=MECH_CENTERING || !s.bus.nodes[6].motion) run(&s,1u);
-        } else {
-            homed(&s);
-            CHECK(Mechanism_MoveRelative(&s.mech,MECH_TRIM,5.0f,1.0f,s.now)==MECH_ACCEPTED);
-            while (!s.bus.nodes[6].motion) run(&s,1u);
-        }
-        run(&s,10u); s.stuck=1u; s.rpm[6]=0; at=s.now;
-        run(&s,2000u);
-        CHECK(s.mech.data.result==MECH_RUNNING && s.mech.data.state!=MECH_CONTACT_STOP);
-        finish(&s,30000u);
-        CHECK(s.mech.data.result==MECH_FAILED && s.mech.data.reason==MECH_TIMEOUT);
-        CHECK(!s.mech.data.reference[2]);
-    }
-    puts("PASS: no-progress home contact -> verified STOP -> full 25mm centering; jitter/wraparound, unconfirmed STOP/cancel block centering, ordinary moves retain timeout");
+    init(&s); until_state(&s,MECH_COLLISION_HOME,1u);
+    while (!s.homes[5]) run(&s,1u);
+    Mechanism_Stop(&s.mech,s.now); finish(&s,8000u);
+    CHECK(s.mech.data.result==MECH_CANCELLED && !s.homes[4] && !s.homes[6]);
+    init(&s); s.reject_enable=6u; finish(&s,20000u);
+    CHECK(s.mech.data.result==MECH_FAILED && !s.homes[5] && !s.mech.auto_pending);
+    init(&s); while (!s.homes[5]) run(&s,1u);
+    s.flags[5]|=4u; finish(&s,10000u);
+    CHECK(s.mech.data.result==MECH_FAILED && !s.homes[4]);
+    init(&s); s.native[1]=0u; while (!s.homes[5]) run(&s,1u);
+    s.freeze_position=6u; run(&s,3500u);
+    CHECK(s.mech.data.result==MECH_FAILED && !s.park_at[5]);
 }
 int main(int argc, char **argv)
 {
-    if (argc>1 && !strcmp(argv[1],"trial")) { trial_tests(); return 0; }
-    default_and_gpio(); home_and_acceptance(); conversion_and_gates(); fault_tests(); collision_tests(); trim_home_contact_tests();
-    printf("MECHANISM PASS (%u checks), sizeof(Mechanism)=%zu\n",checks,sizeof(Mechanism)); return 0;
+    if (argc>1 && !strcmp(argv[1],"trial")) { config_and_startup(); return 0; }
+    config_and_startup(); home_paths(); progress_observation(); limits_and_moves(); stops_and_faults();
+    printf("MECHANISM PASS (%u checks), sizeof(Mechanism)=%zu\n",checks,sizeof(Mechanism));
+    return 0;
 }

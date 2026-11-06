@@ -383,7 +383,7 @@ static int contains(const QrUi *u,const char *text)
 }
 /* Application fixture uses the real QrApp/MotorBus while simulating four motors. */
 static struct {
-    uint8_t bytes[128], pending, online, flags[7], reject_enable, drop_velocity;
+    uint8_t bytes[128], pending, online, flags[7], home_flags[7], reject_enable, drop_velocity;
     int32_t rpm[7];
     /* Persistent STOP retries for absent axes are now intentionally retained. */
     uint8_t code[256], address[256]; uint32_t at[256]; unsigned count, groups;
@@ -427,12 +427,19 @@ static void app_reply(MotorBus *bus,uint32_t now)
         app_motor.rpm[i]=((int32_t)b[3]<<8)|b[4];
         if(b[2]) app_motor.rpm[i]=-app_motor.rpm[i];
         if(app_motor.drop_velocity) return;
-    } else if(b[1]==EMM_STOP) app_motor.rpm[i]=0;
+    } else if(b[1]==EMM_STOP || b[1]==EMM_HOME_ABORT) {
+        app_motor.rpm[i]=0; app_motor.home_flags[i]=11u;
+    } else if(b[1]==EMM_HOME) {
+        app_motor.rpm[i]=-60; app_motor.home_flags[i]=7u;
+    }
     else if(b[1]==EMM_SPEED) {
         length=6u; r[2]=(uint8_t)(app_motor.rpm[i]<0);
         r[4]=(uint8_t)(r[2] ? -app_motor.rpm[i] : app_motor.rpm[i]);
     } else if(b[1]==EMM_POSITION) { length=8u; r[2]=0u; }
     else if(b[1]==EMM_STATUS) r[2]=app_motor.flags[i];
+    else if(b[1]==EMM_HOME_STATUS) {
+        length=5u; r[2]=app_motor.home_flags[i]; r[3]=app_motor.flags[i];
+    }
     r[length-1u]=0x6Bu;
     MotorBus_Receive(bus,r,length,now);
 }
@@ -440,7 +447,8 @@ static void app_fixture(QrApp *a,uint32_t now)
 {
     MotorTransport t={0,app_send,app_busy};
     memset(&app_motor,0,sizeof(app_motor)); app_motor.online=0x0Fu;
-    memset(app_motor.flags,2,sizeof(app_motor.flags)); motor_pump_hook=app_reply;
+    memset(app_motor.flags,2,sizeof(app_motor.flags));
+    memset(app_motor.home_flags,3,sizeof(app_motor.home_flags)); motor_pump_hook=app_reply;
     touch_down=0u; tick=now; BspQrTrigger_Init();
     QrApp_Init(a,t,1u,now);
     CHECK(a->chassis.data.state==CHASSIS_DISARMED && !a->motor.manual);
@@ -484,7 +492,7 @@ static void test_dashboard(void)
     QrApp a; unsigned i,before,pumps; uint32_t session;
     CHECK(BspQrUart_Init()); app_fixture(&a,100000u); app_motor.online=MOTOR_ALL;
     advance(&a,2500u); CHECK(a.ui.page==UI_HOME && !a.ui.more && !app_motor.count);
-    CHECK(contains(&a.ui,"\347\255\211\345\276\205\346\234\272\346\236\204\345\260\261\347\273\252") && contains(&a.ui,"7/7 ONLINE"));
+    CHECK(a.mechanism.auto_pending && contains(&a.ui,"7/7 ONLINE"));
     CHECK(!a.motor.manual); validate_widgets(&a.ui); save_image("dashboard_home.pgm");
     session=a.qr.data.session; pumps=motor_pumps;
     inject("156+123+516+231\r",tick,1); advance(&a,200u);
@@ -754,7 +762,7 @@ static void test_trial_boot(void)
     /* Observe command start independently of the current length scale,
        search bound and RPM. Synthetic feedback is not physical calibration. */
     while (tick-start<4000u && !a.motor.nodes[5].motion) advance(&a,1u);
-    CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_FAST_SEEK);
+    CHECK(a.mechanism.data.axis==MECH_LIFT && a.mechanism.data.state==MECH_COLLISION_HOME);
     CHECK(a.motor.nodes[5].motion && contains(&a.ui,"TRIAL") && contains(&a.ui,"\346\234\272\346\236\204\345\233\236\351\233\266\344\270\255"));
     CHECK(!Servo_IsEnabled(0u) && !Servo_IsEnabled(1u));
     request=a.mechanism.data.request_id;
