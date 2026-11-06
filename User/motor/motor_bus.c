@@ -638,6 +638,17 @@ static int choose(MotorBus *b)
             r.action.command = Emm_Query(r.address, r.code); activate(b, r); return 1;
         }
     }
+    /* Give the active native-homing axis one due position poll before the
+       round-robin background pass. Its 900 ms contact detector requires
+       consecutive samples; the ordinary cursor still services every axis. */
+    for (scan = 4u; scan < MOTOR_COUNT; ++scan) {
+        MotorNode *n = &b->nodes[scan];
+        if (!n->homing || !n->motion || !due(b->now_ms,n->poll_due[1]) ||
+            !due(b->now_ms,n->quiet_until)) continue;
+        r.address=n->data.address; r.mask=bit(r.address);
+        r.code=EMM_POSITION; r.kind=QUERY;
+        r.action.command=Emm_Query(r.address,r.code); activate(b,r); return 1;
+    }
     for (scan = 0u; scan < 21u; ++scan) {
         uint8_t k = b->poll_cursor;
         MotorNode *n = &b->nodes[k / 3u];

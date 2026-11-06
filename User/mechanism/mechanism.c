@@ -53,28 +53,29 @@ uint32_t Mechanism_ConfigIssues(const MechanismConfig *c, unsigned a)
         !positive(p->tolerance) || p->tolerance<p->units_per_rev/p->pulses_per_rev ||
         !c->stable_ms || c->stable_ms>1000u || c->prepare_ms<100u || c->prepare_ms>60000u ||
         c->between_ms<500u || c->between_ms>10000u) r|=MECH_CFG_MOTION;
-    if (a<2u) {
-        const MechanismHomeConfig *h=&c->home[a];
-        if (!h->wiring_confirmed || !h->home_confirmed) r|=MECH_CFG_CONFIRM;
-        if (!positive(h->max_position) || !positive(h->initial_release) || !positive(h->fast_seek) ||
-            !positive(h->backoff) || !positive(h->slow_seek) || !positive(h->clearance) ||
-            !positive(h->fast_rpm) || !positive(h->slow_rpm) || h->slow_rpm>=h->fast_rpm ||
-            h->fast_rpm>p->max_rpm || h->slow_rpm<1.0f ||
-            h->backoff<=p->tolerance || h->clearance<=p->tolerance) r|=MECH_CFG_HOME;
-        if (!positive(c->outside_angle) || c->outside_angle>c->home[0].max_position ||
-            !positive(c->top_window) || !positive(c->work_window) ||
-            c->top_window>=c->home[1].max_position || c->work_window>=c->outside_angle ||
-            !positive(c->test_down_mm) || c->test_down_mm>c->home[1].max_position) r|=MECH_CFG_POSE;
-    }
-    if (a==2u) {
-        const MechanismTrimHomeConfig *h=&c->trim_home;
+    {
+        const MechanismCollisionConfig *h=&c->collision[a];
         double backoff=h->backoff_tenths/3600.0*p->units_per_rev;
-        if (!positive(c->test_trim_mm) || c->test_trim_mm>(double)h->travel_mm/2.0f) r|=MECH_CFG_MOTION;
-        if (!positive(h->travel_mm) || !h->rpm || h->rpm>p->max_rpm ||
-            !h->stall_rpm || !h->stall_ma || !h->stall_ms || !h->backoff_tenths ||
-            backoff>=(double)h->travel_mm/2.0 || h->timeout_ms<100u || h->timeout_ms>60000u)
+        if (!h->rpm || h->rpm>p->max_rpm || !h->stall_rpm || !h->stall_ma ||
+            !h->stall_ms || !h->backoff_tenths || h->timeout_ms<100u ||
+            h->timeout_ms>60000u || !positive(h->progress_units) ||
+            h->progress_units>=backoff || h->progress_units>=p->units_per_rev*h->rpm/60.0)
             r|=MECH_CFG_HOME;
+        if (a==MECH_TRIM && (!positive(c->trim_home.travel_mm) ||
+            backoff>=(double)c->trim_home.travel_mm/2.0)) r|=MECH_CFG_HOME;
     }
+    if (a<2u && !positive(c->home[a].max_position)) r|=MECH_CFG_HOME;
+    if (!positive(c->outside_angle) || c->outside_angle>c->home[0].max_position ||
+        !positive(c->top_window) || !positive(c->work_window) ||
+        c->top_window>=c->home[1].max_position || c->work_window>=c->outside_angle ||
+        !positive(c->observation_mm) || c->observation_mm>c->top_window ||
+        !positive(c->observation_window) ||
+        c->observation_window>=c->observation_mm ||
+        !positive(c->grab_mm) || c->grab_mm>c->home[1].max_position ||
+        c->grab_mm<=c->observation_mm || !positive(c->test_down_mm) ||
+        c->test_down_mm+c->observation_mm>c->home[1].max_position ||
+        !positive(c->test_trim_mm) || c->test_trim_mm>c->trim_home.travel_mm/2.0f)
+        r|=MECH_CFG_POSE;
     return r;
 }
 static MechanismRequestResult reject(Mechanism *m, MechanismRequestResult r, MechanismReason why)
@@ -96,13 +97,13 @@ static void begin(Mechanism *m, uint8_t op, uint32_t now)
     m->data.acceptance=(uint8_t)(op==OP_TEST);
     m->data.homing=(uint8_t)(op==OP_HOME);
     m->operation=op; m->owned=1u; m->touched=m->segment=m->stable=m->enable_wait=0u;
-    m->triggered=m->waiting_position=0u; m->deadline=now+m->config.prepare_ms;
-    m->progress_request=0u;
+    m->waiting_position=0u; m->deadline=now+m->config.prepare_ms;
+    m->progress_request=0u; m->progress_active=0u;
 }
 static void fail(Mechanism *m, MechanismReason why, uint32_t now)
 {
     if (m->data.reason==MECH_OK) m->data.reason=why; /* first failure survives recovery */
-    if (why==MECH_FEEDBACK || why==MECH_DRIVER_FAULT || why==MECH_LIMIT || why==MECH_SAMPLE_GAP ||
+    if (why==MECH_FEEDBACK || why==MECH_DRIVER_FAULT || why==MECH_LIMIT ||
         why==MECH_ENABLE_FAILED || why==MECH_FINAL_ERROR || why==MECH_BUS_REJECTED || why==MECH_TIMEOUT)
         m->data.reference[m->data.axis]=MECH_UNREFERENCED;
     m->data.result=MECH_FAILED; m->data.acceptance=0u; m->operation=OP_NONE;
@@ -130,20 +131,18 @@ void Mechanism_SampleLimits(Mechanism *m, uint8_t arm, uint8_t lift, uint32_t no
         l->sampled=1u; l->raw=raw[a];
         if (now-l->changed_ms>=20u) { l->stable=l->raw; l->valid=1u; }
     }
-    if (gap>10u && m->owned && m->data.state!=MECH_STOPPING) fail(m,MECH_SAMPLE_GAP,now);
+    /* PG2/PG3 remain live display telemetry. Sampling gaps do not gate motion. */
 }
 MechanismRequestResult Mechanism_HomeAll(Mechanism *m, uint32_t now)
 {
     unsigned a;
     if (m->owned || peer_busy(m)) return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
     if (stops_pending(m)) return reject(m,MECH_NOT_READY,MECH_STOP_UNCONFIRMED);
-    if (m->data.config_issues[0] || m->data.config_issues[1]) return reject(m,MECH_INVALID,MECH_CONFIG);
-    if (!m->data.limit[0].valid || !m->data.limit[1].valid || now-m->last_sample_ms>10u)
-        return reject(m,MECH_NOT_READY,MECH_SAMPLE_GAP);
-    for (a=0u;a<3u;++a) {
-        const MotorNode *n=node(m,a);
-        if (busy_node(n) || (MotorBus_Fresh(n,MOTOR_VALID_SPEED,now) && n->data.speed_rpm))
-            return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
+    for (a=0u;a<3u;++a) if (m->data.config_issues[a]) return reject(m,MECH_INVALID,MECH_CONFIG);
+    for (a=0u;a<MOTOR_COUNT;++a) {
+        const MotorNode *n=&m->bus->nodes[a];
+        if (busy_node(n) || n->data.speed_rpm) return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
+        if (!healthy(n,now,0u)) return reject(m,MECH_NOT_READY,MECH_FEEDBACK);
     }
     begin(m,OP_HOME,now); m->auto_pending=0u;
     m->data.reference[0]=m->data.reference[1]=m->data.reference[2]=MECH_UNREFERENCED;
@@ -154,11 +153,20 @@ static MechanismReason interlock(Mechanism *m, unsigned a, double target, uint32
 {
     if (a==MECH_ARM && (m->data.reference[MECH_LIFT]!=MECH_HOMED ||
         !healthy(node(m,MECH_LIFT),now,1u) || busy_node(node(m,MECH_LIFT)) ||
-        node(m,MECH_LIFT)->data.speed_rpm || fabs(position(m,MECH_LIFT))>m->config.top_window)) return MECH_INTERLOCK;
+        node(m,MECH_LIFT)->data.speed_rpm || position(m,MECH_LIFT)<-m->config.axis[MECH_LIFT].tolerance ||
+        position(m,MECH_LIFT)>m->config.top_window)) return MECH_INTERLOCK;
     if (a==MECH_LIFT && target>position(m,a) &&
         (m->data.reference[MECH_ARM]!=MECH_HOMED || !healthy(node(m,MECH_ARM),now,1u) ||
         busy_node(node(m,MECH_ARM)) || node(m,MECH_ARM)->data.speed_rpm ||
         fabs(position(m,MECH_ARM)-m->config.outside_angle)>m->config.work_window)) return MECH_INTERLOCK;
+    if (a==MECH_TRIM && (m->data.reference[MECH_ARM]!=MECH_HOMED ||
+        m->data.reference[MECH_LIFT]!=MECH_HOMED ||
+        !healthy(node(m,MECH_ARM),now,1u) || !healthy(node(m,MECH_LIFT),now,1u) ||
+        busy_node(node(m,MECH_ARM)) || busy_node(node(m,MECH_LIFT)) ||
+        node(m,MECH_ARM)->data.speed_rpm || node(m,MECH_LIFT)->data.speed_rpm ||
+        fabs(position(m,MECH_ARM)-m->config.outside_angle)>m->config.work_window ||
+        fabs(position(m,MECH_LIFT)-m->config.observation_mm)>m->config.observation_window))
+        return MECH_INTERLOCK;
     return MECH_OK;
 }
 /* Conversion uses wide arithmetic, rounds pulses once and never clips a motion.
@@ -211,9 +219,6 @@ static MechanismRequestResult ready(Mechanism *m, unsigned a, uint32_t now)
     if (!m->data.reference[a]) return reject(m,MECH_NOT_READY,MECH_REFERENCE);
     if (!healthy(node(m,a),now,1u)) return reject(m,MECH_NOT_READY,MECH_FEEDBACK);
     if (busy_node(node(m,a)) || node(m,a)->data.speed_rpm) return reject(m,MECH_BUSY,MECH_AXIS_BUSY);
-    if (now-m->last_sample_ms>10u || !m->data.limit[0].valid || !m->data.limit[1].valid)
-        return reject(m,MECH_NOT_READY,MECH_SAMPLE_GAP);
-    if (m->data.limit[0].raw || m->data.limit[1].raw) return reject(m,MECH_NOT_READY,MECH_LIMIT);
     return MECH_ACCEPTED;
 }
 MechanismRequestResult Mechanism_MoveTo(Mechanism *m, MechanismAxis a, float target, float speed, uint32_t now)
@@ -223,8 +228,6 @@ MechanismRequestResult Mechanism_MoveTo(Mechanism *m, MechanismAxis a, float tar
     r=ready(m,(unsigned)a,now); if (r!=MECH_ACCEPTED) return r;
     if (!target_in_range(m,(unsigned)a,target)) return reject(m,MECH_INVALID,MECH_LIMIT);
     why=interlock(m,(unsigned)a,target,now); if (why!=MECH_OK) return reject(m,MECH_NOT_READY,why);
-    if ((a<MECH_TRIM && m->data.limit[a].raw) || m->data.limit[0].raw || m->data.limit[1].raw)
-        return reject(m,MECH_NOT_READY,MECH_LIMIT);
     /* Validate/submit before changing logical request state, so invalid requests do not acquire ownership. */
     why=submit(m,(unsigned)a,target-position(m,a),speed,now,&noop);
     if (why!=MECH_OK) return reject(m,MECH_INVALID,why);
@@ -249,8 +252,9 @@ MechanismRequestResult Mechanism_StartAcceptance(Mechanism *m, uint32_t now)
 {
     unsigned a; MechanismRequestResult r;
     for (a=0u;a<3u;++a) { r=ready(m,a,now); if (r!=MECH_ACCEPTED) return r; }
-    if (fabs(position(m,MECH_ARM))>m->config.axis[0].tolerance ||
-        fabs(position(m,MECH_LIFT))>m->config.top_window) return reject(m,MECH_NOT_READY,MECH_INTERLOCK);
+    if (fabs(position(m,MECH_ARM)-m->config.outside_angle)>m->config.work_window ||
+        fabs(position(m,MECH_LIFT)-m->config.observation_mm)>m->config.axis[1].tolerance)
+        return reject(m,MECH_NOT_READY,MECH_INTERLOCK);
     if (!target_in_range(m,MECH_TRIM,position(m,MECH_TRIM)+m->config.test_trim_mm) ||
         !target_in_range(m,MECH_TRIM,position(m,MECH_TRIM)-m->config.test_trim_mm))
         return reject(m,MECH_INVALID,MECH_LIMIT);
@@ -275,7 +279,7 @@ static void complete(Mechanism *m)
 }
 static void next_step(Mechanism *m, MechanismState state, uint32_t now)
 {
-    m->data.state=state; m->segment=m->stable=m->triggered=m->waiting_position=0u;
+    m->data.state=state; m->segment=m->stable=m->waiting_position=0u;
     m->deadline=now+m->config.prepare_ms;
 }
 static int settled(Mechanism *m, const MotorNode *n, uint32_t now)
@@ -287,12 +291,14 @@ static int settled(Mechanism *m, const MotorNode *n, uint32_t now)
 static void home_axis_done(Mechanism *m, uint32_t now)
 {
     unsigned a=m->data.axis;
-    m->data.origin_counts[a]=node(m,a)->data.position_counts; m->data.reference[a]=MECH_HOMED;
-    if (a==MECH_LIFT) { m->data.axis=MECH_ARM; next_step(m,MECH_PREPARE,now); }
-    else {
-        m->data.axis=MECH_TRIM;
-        if (!m->data.config_issues[2] && healthy(node(m,2u),now,0u)) next_step(m,MECH_PREPARE,now);
-        else complete(m); /* absence of 7 never invents an unconfirmable STOP */
+    if (a==MECH_TRIM) {
+        m->data.origin_counts[a]=node(m,a)->data.position_counts;
+        m->data.reference[a]=MECH_HOMED; m->data.trim_ready=1u;
+        m->data.axis=MECH_LIFT; next_step(m,MECH_CHECK,now);
+    } else {
+        m->data.reference[a]=MECH_HOMED;
+        m->data.axis=(uint8_t)(a==MECH_LIFT ? MECH_ARM : MECH_TRIM);
+        next_step(m,MECH_PREPARE,now);
     }
 }
 static int new_position_after(Mechanism *m, const MotorNode *n, uint32_t now)
@@ -304,29 +310,17 @@ static int new_position_after(Mechanism *m, const MotorNode *n, uint32_t now)
 }
 static void prepare(Mechanism *m, uint32_t now)
 {
-    unsigned i,a=m->data.axis; uint8_t known_wheels=0u; MotorNode *n=node(m,a);
+    unsigned i,a=m->data.axis; MotorNode *n=node(m,a);
     if (due(now,m->deadline)) { fail(m,MECH_ENABLE_FAILED,now); return; }
-    /* Known wheels must stop; nodes never seen/commanded are optional on a bench. */
-    for (i=0u;i<4u;++i) {
-        const MotorNode *w=&m->bus->nodes[i];
-        if (w->data.valid || w->request_id || w->data.rx_count || w->stop_unconfirmed) known_wheels|=(uint8_t)(1u<<i);
-    }
+    /* HOME only starts with all seven online. Recheck wheel health before each axis. */
     for (i=0u;i<4u;++i) {
         MotorNode *w=&m->bus->nodes[i];
-        if (!(known_wheels & (1u<<i))) continue;
-        if (w->stop_unconfirmed) return;
-        if (busy_node(w) || (MotorBus_Fresh(w,MOTOR_VALID_SPEED,now) && w->data.speed_rpm)) {
-            if (!w->stop_unconfirmed) MotorBus_Stop(m->bus,known_wheels,now);
-            return;
+        if (!healthy(w,now,0u) || busy_node(w) || w->data.speed_rpm) {
+            fail(m,MECH_FEEDBACK,now); return;
         }
-        /* During power-on discovery fields arrive separately. Missing position
-           is not evidence of wheel motion; wait for speed/status rather than
-           cancelling their queries with repeated STOP requests. */
-        if (!w->data.online || !MotorBus_Fresh(w,MOTOR_VALID_SPEED,now) ||
-            !MotorBus_Fresh(w,MOTOR_VALID_STATUS,now) || (w->data.status_flags & 12u) ||
-            w->action==MOTOR_UNKNOWN) return;
     }
-    if (a!=MECH_TRIM && (!healthy(node(m,0u),now,0u) || !healthy(node(m,1u),now,0u))) return;
+    for (i=0u;i<3u;++i) if (i!=a && (!healthy(node(m,i),now,0u) ||
+        busy_node(node(m,i)) || node(m,i)->data.speed_rpm)) { fail(m,MECH_FEEDBACK,now); return; }
     if (m->enable_wait) {
         if (n->request_id!=m->segment_request || n->action==MOTOR_REJECTED || n->action==MOTOR_UNKNOWN || n->stop_unconfirmed) {
             fail(m,MECH_ENABLE_FAILED,now); return;
@@ -346,46 +340,73 @@ static void prepare(Mechanism *m, uint32_t now)
         return;
     }
     if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
-    if (a==MECH_TRIM) {
-        next_step(m,MECH_COLLISION_HOME,now);
-    } else next_step(m,MECH_CHECK,now);
+    next_step(m,MECH_COLLISION_HOME,now);
 }
-/* User-validated endpoint detection, ONLY during TRIM homing search.
-   New position samples and a displacement deadband reject encoder jitter.
-   First abort native homing and verify STOP; then retreat 25 mm from contact. */
-static int trim_progress(Mechanism *m, const MotorNode *n, uint32_t now)
+/* Return software search sign: ARM/LIFT seek inward/up, TRIM extends. */
+static int seek_sign(unsigned a) { return a==MECH_TRIM ? 1 : -1; }
+static int64_t backoff_counts(const Mechanism *m, unsigned a)
 {
-    double travel;
-    if (!n->motion) { m->progress_request=0u; return 1; }
-    if (m->progress_request!=n->request_id) {
-        m->progress_request=n->request_id; m->progress_ms=n->action_ms;
-        m->progress_counts=n->data.position_counts; m->progress_seq=n->data.position_seq;
+    double v=m->config.collision[a].backoff_tenths/3600.0*65536.0;
+    return (int64_t)(v+0.5);
+}
+static void start_park(Mechanism *m, unsigned a, int64_t contact, uint32_t now)
+{
+    MechanismReason why; uint8_t noop;
+    double target=a==MECH_ARM ? m->config.outside_angle :
+        a==MECH_LIFT ? m->config.observation_mm : -(double)m->config.trim_home.travel_mm/2.0;
+    m->data.origin_counts[a]=contact;
+    why=submit(m,a,target-position(m,a),m->config.axis[a].move_speed,now,&noop);
+    if (why!=MECH_OK) { fail(m,why,now); return; }
+    m->data.target=target; m->data.state=a==MECH_TRIM ? MECH_CENTERING : MECH_PARK_RELEASE;
+    m->waiting_position=0u;
+    if (noop) m->deadline=now+m->config.prepare_ms;
+}
+static void collision_progress(Mechanism *m, MotorNode *n, uint32_t now)
+{
+    unsigned a=m->data.axis;
+    const MechanismAxisConfig *c=&m->config.axis[a];
+    const MechanismCollisionConfig *h=&m->config.collision[a];
+    double step, travel;
+    if (!n->motion || (n->action!=MOTOR_ACCEPTED && n->action!=MOTOR_EXECUTING)) return;
+    if (!m->progress_active || m->progress_request!=n->request_id) {
+        m->progress_active=1u; m->progress_request=n->request_id;
+        m->progress_seq=n->data.position_seq; m->progress_ms=0u;
+        m->progress_last_counts=n->data.position_counts;
         m->progress_retreating=0u;
     }
-    if (n->data.position_seq==m->progress_seq || !due(n->data.position_ms,n->action_ms+1u)) return 1;
+    if (n->data.position_seq==m->progress_seq ||
+        !due(n->data.position_ms,n->action_ms+1u)) return;
     m->progress_seq=n->data.position_seq;
-    travel=(double)(n->data.position_counts-m->progress_counts)*m->config.axis[MECH_TRIM].units_per_rev/65536.0;
-    /* Once native backoff has been observed, a later jam is not the search endpoint. */
-    if (travel*m->config.axis[MECH_TRIM].positive_sign<=-MECHANISM_TRIM_PROGRESS_MM) m->progress_retreating=1u;
-    if (m->progress_retreating) return 1;
-    if (fabs(travel)>=MECHANISM_TRIM_PROGRESS_MM) {
-        m->progress_counts=n->data.position_counts; m->progress_ms=now;
-    } else if (now-m->progress_ms>=MECHANISM_TRIM_NO_PROGRESS_MS) {
-        MotorBus_Stop(m->bus,axis_bit(MECH_TRIM),now);
-        m->data.state=MECH_CONTACT_STOP; m->data.stop_pending=1u;
-        m->data.stop_request_ms=now; m->stop_at=now;
-        m->deadline=now+3000u; m->waiting_position=m->stable=0u;
-        return 0;
+    step=(double)(n->data.position_counts-m->progress_last_counts)*
+        c->positive_sign*c->units_per_rev/65536.0;
+    m->progress_last_counts=n->data.position_counts;
+    if (step*seek_sign(a)<=-(double)h->progress_units) m->progress_retreating=1u;
+    if (m->progress_retreating) return; /* native reverse/backoff owns completion */
+    if (!m->progress_ms || n->data.position_ms-m->progress_sample_ms>
+        MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS) {
+        m->progress_counts=n->data.position_counts;
+        m->progress_ms=m->progress_sample_ms=n->data.position_ms;
+        return;
     }
-    return 1;
+    m->progress_sample_ms=n->data.position_ms;
+    travel=(double)(n->data.position_counts-m->progress_counts)*
+        c->positive_sign*c->units_per_rev/65536.0;
+    if (fabs(travel)>=h->progress_units) {
+        m->progress_counts=n->data.position_counts; m->progress_ms=n->data.position_ms;
+    } else if ((uint32_t)(n->data.position_ms-m->progress_ms)>=MECHANISM_NO_PROGRESS_MS) {
+        m->contact_counts=n->data.position_counts;
+        m->data.stop_request_ms=now; m->stop_at=now;
+        MotorBus_Stop(m->bus,axis_bit(a),now);
+        m->data.state=MECH_CONTACT_STOP; m->data.stop_pending=1u;
+        m->deadline=now+3000u; m->waiting_position=m->stable=0u;
+    }
 }
-/* Native homing owns collision success detection. */
-static void trim_home_process(Mechanism *m, uint32_t now)
+static void collision_home_process(Mechanism *m, uint32_t now)
 {
-    const MechanismTrimHomeConfig *h=&m->config.trim_home;
-    const MechanismAxisConfig *c=&m->config.axis[MECH_TRIM];
-    MotorNode *n=node(m,MECH_TRIM); EmmCommand command; MechanismReason why; uint8_t noop;
-    double delta= -((double)h->travel_mm/2.0-h->backoff_tenths/3600.0*c->units_per_rev);
+    unsigned a=m->data.axis; MotorNode *n=node(m,a);
+    const MechanismCollisionConfig *h=&m->config.collision[a];
+    const MechanismAxisConfig *c=&m->config.axis[a];
+    EmmCommand command;
     if (m->data.state==MECH_CONTACT_STOP) {
         if (n->stop_sent) m->data.stop_submit_ms=n->stop_first_ms;
         if (due(now,m->deadline)) { fail(m,MECH_STOP_UNCONFIRMED,now); return; }
@@ -393,105 +414,65 @@ static void trim_home_process(Mechanism *m, uint32_t now)
         if (!healthy(n,now,1u)) { fail(m,motor_reason(n),now); return; }
         if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
         m->data.stop_confirm_ms=now; m->data.stop_pending=0u;
-        /* Native backoff was aborted: full half-travel, NOT the native 24 mm remainder. */
-        why=submit(m,MECH_TRIM,-(double)h->travel_mm/2.0,h->rpm*c->units_per_rev/60.0,now,&noop);
-        if (why!=MECH_OK || noop) { fail(m,why!=MECH_OK ? why : MECH_RESOLUTION,now); return; }
-        m->data.target=0.0; m->data.state=MECH_CENTERING; m->waiting_position=0u;
+        start_park(m,a,m->contact_counts,now); /* interrupted before native backoff */
         return;
+    }
+    if (m->data.state==MECH_PARK_RELEASE || m->data.state==MECH_CENTERING) {
+        if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
+        if (n->request_id!=m->segment_request || n->stop_unconfirmed ||
+            n->action==MOTOR_CANCELLED || n->action==MOTOR_REJECTED ||
+            n->action==MOTOR_UNKNOWN) { fail(m,MECH_BUS_REJECTED,now); return; }
+        if (n->action!=MOTOR_COMPLETE || !settled(m,n,now) ||
+            !new_position_after(m,n,now)) return;
+        if (fabs(position(m,a)-m->data.target)>c->tolerance) {
+            fail(m,MECH_FINAL_ERROR,now); return;
+        }
+        home_axis_done(m,now); return;
+    }
+    if (m->data.state==MECH_CHECK) {
+        if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
+        if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
+        if (m->data.reference[0]!=MECH_HOMED || m->data.reference[1]!=MECH_HOMED ||
+            m->data.reference[2]!=MECH_HOMED ||
+            fabs(position(m,MECH_ARM)-m->config.outside_angle)>m->config.axis[0].tolerance ||
+            fabs(position(m,MECH_LIFT)-m->config.observation_mm)>c->tolerance ||
+            fabs(position(m,MECH_TRIM))>m->config.axis[2].tolerance ||
+            !settled(m,node(m,MECH_ARM),now) || !settled(m,node(m,MECH_TRIM),now)) {
+            fail(m,MECH_FINAL_ERROR,now); return;
+        }
+        complete(m); return;
     }
     if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
     if (m->segment) {
-        if (n->request_id!=m->segment_request || n->stop_unconfirmed || n->action==MOTOR_CANCELLED) {
-            fail(m,MECH_BUS_REJECTED,now); return;
+        if (n->request_id!=m->segment_request || n->stop_unconfirmed ||
+            n->action==MOTOR_CANCELLED || n->action==MOTOR_REJECTED ||
+            n->action==MOTOR_UNKNOWN) { fail(m,MECH_BUS_REJECTED,now); return; }
+        if (m->segment==3u) {
+            if (n->action!=MOTOR_COMPLETE) { collision_progress(m,n,now); return; }
+            if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
+            start_park(m,a,n->data.position_counts+
+                seek_sign(a)*c->positive_sign*backoff_counts(m,a),now);
+            return;
         }
         if (n->action!=MOTOR_COMPLETE) return;
     }
-    if (m->data.state==MECH_CENTERING) {
-        if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
-        if (fabs((double)n->data.position_counts*c->positive_sign*c->units_per_rev/65536.0-
-            m->segment_target)>c->tolerance) { fail(m,MECH_FINAL_ERROR,now); return; }
-        m->data.origin_counts[MECH_TRIM]=n->data.position_counts;
-        m->data.reference[MECH_TRIM]=MECH_HOMED; m->data.trim_ready=1u; complete(m); return;
-    }
-    if (m->segment==3u) {
-        if (!settled(m,n,now) || !new_position_after(m,n,now)) return;
-        why=submit(m,MECH_TRIM,delta,h->rpm*c->units_per_rev/60.0,now,&noop);
-        if (why!=MECH_OK || noop) { fail(m,why!=MECH_OK ? why : MECH_RESOLUTION,now); return; }
-        m->data.target=0.0; m->data.state=MECH_CENTERING; m->waiting_position=0u; return;
-    }
-    command=m->segment==0u ? Emm_HomeConfig(7u,(uint8_t)(c->positive_sign<0),h->rpm,
-        h->timeout_ms,h->stall_rpm,h->stall_ma,h->stall_ms) :
-        m->segment==1u ? Emm_HomeBackoff(7u,h->backoff_tenths) : Emm_Home(7u);
-    if (!MotorBus_HomeCommand(m->bus,&command,h->timeout_ms,now)) { fail(m,MECH_BUS_REJECTED,now); return; }
-    m->segment_request=n->request_id; m->data.bus_request_id=n->request_id;
-    m->touched|=axis_bit(MECH_TRIM); ++m->segment;
-    m->deadline=now+(m->segment==3u ? h->timeout_ms : m->config.prepare_ms)+1000u;
-}
-static void home_process(Mechanism *m, uint32_t now)
-{
-    unsigned a=m->data.axis; MotorNode *n=node(m,a);
-    MechanismLimit *l=&m->data.limit[a]; const MechanismHomeConfig *h=&m->config.home[a];
-    MechanismState state=m->data.state; MechanismReason why;
-    double delta=0.0,rpm=h->slow_rpm; uint8_t noop;
-    int seeking=(state==MECH_FAST_SEEK || state==MECH_SLOW_SEEK);
-    if (state==MECH_CHECK) {
-        if (l->valid) next_step(m,l->stable ? MECH_INITIAL_RELEASE : MECH_FAST_SEEK,now);
-        return;
-    }
-    if (due(now,m->deadline)) { fail(m,MECH_TIMEOUT,now); return; }
-    if (m->segment==2u) {
-        if (m->triggered && now-m->trigger_at>=200u && (!l->valid || !l->stable)) {
-            fail(m,MECH_LIMIT_UNSTABLE,now); return;
-        }
-        if (n->stop_sent) m->data.stop_submit_ms=n->stop_first_ms;
-        if (n->stop_unconfirmed) {
-            if (now-m->stop_at>=3000u) fail(m,MECH_STOP_UNCONFIRMED,now);
-            return;
-        }
-        if (!healthy(n,now,1u) || n->data.speed_rpm) { fail(m,MECH_FEEDBACK,now); return; }
-        if (!m->waiting_position) m->data.stop_confirm_ms=now;
-        if (!new_position_after(m,n,now) || !l->valid || (seeking ? !l->stable : l->stable)) return;
-        m->data.stop_pending=0u;
-        if (state==MECH_SLOW_SEEK) m->data.approach_counts[a]=n->data.position_counts;
-        next_step(m,state==MECH_INITIAL_RELEASE ? MECH_FAST_SEEK :
-            state==MECH_FAST_SEEK ? MECH_BACKOFF : MECH_PARK_RELEASE,now);
-        return;
-    }
-    if (m->segment==3u) {
-        if (l->valid && !l->stable && settled(m,n,now) && new_position_after(m,n,now)) home_axis_done(m,now);
-        return;
-    }
-    if ((m->segment<=1u && seeking && l->raw) ||
-        (m->segment==1u && state==MECH_INITIAL_RELEASE && l->valid && !l->stable)) {
-        m->triggered=(uint8_t)seeking; m->trigger_at=now; m->stop_at=now;
-        if (seeking) m->data.trigger_ms=now;
-        m->data.stop_request_ms=now; m->data.stop_pending=1u;
-        m->touched|=axis_bit(a);
-        MotorBus_Stop(m->bus,axis_bit(a),now); m->segment=2u; m->waiting_position=0u;
-        return;
-    }
-    if (!m->segment) {
-        if (state==MECH_INITIAL_RELEASE) delta=h->initial_release;
-        else if (state==MECH_FAST_SEEK) { delta= -h->fast_seek; rpm=h->fast_rpm; }
-        else if (state==MECH_BACKOFF) delta=h->backoff;
-        else if (state==MECH_SLOW_SEEK) delta= -h->slow_seek;
-        else if (state==MECH_PARK_RELEASE) delta=h->clearance;
-        why=submit(m,a,delta,rpm*m->config.axis[a].units_per_rev/60.0,now,&noop);
-        if (why!=MECH_OK || noop) fail(m,why!=MECH_OK ? why : MECH_RESOLUTION,now);
-        return;
-    }
-    if (n->request_id!=m->segment_request || n->stop_unconfirmed || n->action==MOTOR_CANCELLED) {
+    command=m->segment==0u ? Emm_HomeConfig((uint8_t)(a+5u),
+        (uint8_t)(seek_sign(a)*c->positive_sign<0),h->rpm,h->timeout_ms,
+        h->stall_rpm,h->stall_ma,h->stall_ms) :
+        m->segment==1u ? Emm_HomeBackoff((uint8_t)(a+5u),h->backoff_tenths) :
+        Emm_Home((uint8_t)(a+5u));
+    if (!MotorBus_HomeCommand(m->bus,&command,h->timeout_ms,now)) {
         fail(m,MECH_BUS_REJECTED,now); return;
     }
-    if (n->action!=MOTOR_COMPLETE || !settled(m,n,now)) return;
-    if (seeking) { fail(m,MECH_NOT_FOUND,now); return; }
-    if (state==MECH_INITIAL_RELEASE || !l->valid || l->stable) { fail(m,MECH_NOT_RELEASED,now); return; }
-    if (fabs((double)n->data.position_counts*m->config.axis[a].positive_sign*
-        m->config.axis[a].units_per_rev/65536.0-m->segment_target)>m->config.axis[a].tolerance) {
-        fail(m,MECH_FINAL_ERROR,now); return;
+    m->segment_request=n->request_id; m->data.bus_request_id=n->request_id;
+    m->touched|=axis_bit(a); ++m->segment;
+    if (m->segment==3u) {
+        m->progress_active=1u; m->progress_request=n->request_id;
+        m->progress_seq=n->data.position_seq; m->progress_ms=0u;
+        m->progress_last_counts=n->data.position_counts;
+        m->progress_retreating=0u;
     }
-    if (state==MECH_BACKOFF) next_step(m,MECH_SLOW_SEEK,now);
-    else { m->segment=3u; m->waiting_position=0u; }
+    m->deadline=now+(m->segment==3u ? h->timeout_ms : m->config.prepare_ms)+1000u;
 }
 static void test_next(Mechanism *m, uint32_t now)
 {
@@ -499,9 +480,10 @@ static void test_next(Mechanism *m, uint32_t now)
     unsigned stage=m->data.stage,a; double target; MechanismReason why; uint8_t noop=0u;
     if (stage>=8u) { complete(m); return; }
     a=axes[stage]; m->data.axis=(uint8_t)a;
-    target=stage==0u ? m->config.outside_angle : stage==1u ? m->config.test_down_mm :
+    target=stage==0u ? m->config.outside_angle : stage==1u ? m->config.observation_mm+m->config.test_down_mm :
         stage==3u ? m->trim_start+m->config.test_trim_mm : stage==5u ? m->trim_start-m->config.test_trim_mm :
-        (stage>=3u && stage<=6u) ? m->trim_start : 0.0;
+        (stage>=3u && stage<=6u) ? m->trim_start :
+        stage==2u ? m->config.observation_mm : m->config.outside_angle;
     why=interlock(m,a,target,now);
     if (why==MECH_OK && !target_in_range(m,a,target)) why=MECH_LIMIT;
     if (why==MECH_OK) why=submit(m,a,target-position(m,a),m->config.axis[a].move_speed,now,&noop);
@@ -522,14 +504,16 @@ void Mechanism_Process(Mechanism *m, uint32_t now)
         m->data.position[a]=position(m,a);
     }
     m->data.trim_ready=(uint8_t)(m->data.reference[2]==MECH_HOMED);
-    if (m->auto_pending && m->data.limit[0].valid && m->data.limit[1].valid) {
-        m->auto_pending=0u; (void)Mechanism_HomeAll(m,now);
-    }
-    if (m->owned && m->data.state!=MECH_STOPPING && now-m->last_sample_ms>10u) fail(m,MECH_SAMPLE_GAP,now);
-    /* Unexpected limit outside explicit homing aborts even while parked. */
-    for (a=0u;a<2u;++a) if (m->data.limit[a].raw && m->data.reference[a] &&
-        !(m->operation==OP_HOME && m->data.axis==a)) {
-        m->data.axis=(uint8_t)a; m->touched|=axis_bit(a); m->owned=1u; fail(m,MECH_LIMIT,now);
+    if (m->auto_pending && !m->owned && !peer_busy(m) &&
+        Mechanism_HomeAll(m,now)==MECH_ACCEPTED) m->auto_pending=0u;
+    if (m->owned && m->operation==OP_HOME && m->data.state!=MECH_STOPPING) {
+        for (a=0u;a<MOTOR_COUNT;++a) {
+            n=&m->bus->nodes[a];
+            if (a>=4u && a==m->data.axis+4u) continue;
+            if (!healthy(n,now,0u) || (a<4u && (busy_node(n) || n->data.speed_rpm))) {
+                fail(m,MECH_FEEDBACK,now); break;
+            }
+        }
     }
     if (!m->owned) return;
     if (m->data.state==MECH_STOPPING) {
@@ -546,17 +530,16 @@ void Mechanism_Process(Mechanism *m, uint32_t now)
     }
     if (m->data.state==MECH_PREPARE) { prepare(m,now); return; }
     a=m->data.axis; n=node(m,a);
-    if (m->operation==OP_HOME && a==MECH_TRIM && m->data.state==MECH_CONTACT_STOP) {
-        trim_home_process(m,now); return;
+    if (m->operation==OP_HOME && m->data.state==MECH_CONTACT_STOP) {
+        collision_home_process(m,now); return;
     }
-    if (a==MECH_ARM && interlock(m,a,m->data.target,now)!=MECH_OK) { fail(m,MECH_INTERLOCK,now); return; }
-    if (!healthy(n,now,1u) && !(m->operation==OP_HOME && m->segment==2u && n->stop_unconfirmed)) {
+    if (a==MECH_ARM && m->data.state!=MECH_COLLISION_HOME &&
+        interlock(m,a,m->data.target,now)!=MECH_OK) { fail(m,MECH_INTERLOCK,now); return; }
+    if (!healthy(n,now,1u)) {
         fail(m,motor_reason(n),now); return;
     }
-    if (m->operation==OP_HOME && a==MECH_TRIM && m->data.state==MECH_COLLISION_HOME &&
-        m->segment==3u && !trim_progress(m,n,now)) return;
     if (m->operation==OP_HOME) {
-        if (a==MECH_TRIM) trim_home_process(m,now); else home_process(m,now);
+        collision_home_process(m,now);
         return;
     }
     if (m->data.state==MECH_BETWEEN) { if (due(now,m->deadline)) test_next(m,now); return; }
@@ -573,14 +556,14 @@ void Mechanism_Process(Mechanism *m, uint32_t now)
 void Mechanism_GetSnapshot(const Mechanism *m, MechanismSnapshot *out) { if (out) *out=m->data; }
 const char *Mechanism_StateName(MechanismState s)
 {
-    static const char * const names[]={"IDLE","PREPARE","CHECK","INITIAL RELEASE","FAST SEEK","BACKOFF",
-        "SLOW SEEK","PARK RELEASE","MOVING","BETWEEN","STOPPING","FAULT","COLLISION HOME","CENTERING","CONTACT STOP"};
+    static const char * const names[]={"IDLE","PREPARE","CHECK","PARK RELEASE",
+        "MOVING","BETWEEN","STOPPING","FAULT","COLLISION HOME","CENTERING","CONTACT STOP"};
     return (unsigned)s<sizeof(names)/sizeof(names[0]) ? names[s] : "?";
 }
 const char *Mechanism_ReasonName(MechanismReason r)
 {
     static const char * const names[]={"OK","CONFIG REQUIRED","FEEDBACK","AXIS BUSY","POSE INTERLOCK",
-        "ENABLE FAILED","ACTION TIMEOUT","BUS REJECTED","LIMIT","LIMIT UNSTABLE","LIMIT SAMPLE GAP",
-        "LIMIT NOT FOUND","LIMIT NOT RELEASED","FINAL ERROR","RESOLUTION","STOP UNCONFIRMED","BAD REQUEST","NEED HOME","MOTOR STALL/PROTECTION"};
+        "ENABLE FAILED","ACTION TIMEOUT","BUS REJECTED","LIMIT","FINAL ERROR",
+        "RESOLUTION","STOP UNCONFIRMED","BAD REQUEST","NEED HOME","MOTOR STALL/PROTECTION"};
     return (unsigned)r<sizeof(names)/sizeof(names[0]) ? names[r] : "?";
 }
