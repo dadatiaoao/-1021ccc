@@ -24,8 +24,8 @@ static MechanismConfig config(void)
     for (a=0u;a<3u;++a) {
         c.axis[a].calibrated=1u; c.axis[a].pulses_per_rev=3200u;
         c.axis[a].positive_sign=1;
-        c.axis[a].max_rpm=(float)c.collision[a].rpm+0.1f;
-        c.axis[a].move_speed=a==0u ? 18.0f : a==1u ? 20.0f : 2.0f;
+        c.axis[a].max_rpm=a==0u ? 20.1f : a==1u ? 60.1f : 200.1f;
+        c.axis[a].move_speed=a==0u ? 40.0f : a==1u ? 40.0f : 3.333333f;
     }
     return c;
 }
@@ -141,7 +141,7 @@ static void run(Sim *s, uint32_t duration)
                         (s->home_dir[a] ? 1.0 : -1.0);
                 } else s->rpm[a]=0;
             } else if (s->home_phase[a]==1u && !s->native[a-4u] && !s->rpm[a]) {
-                /* Static contact waits for the controller's 900 ms detector. */
+                /* Static contact waits for the controller's 1500 ms detector. */
             } else if (s->home_phase[a]==1u) s->counts[a]+=step;
             else if (fabs(s->target[a]-s->counts[a])<=fabs(step)) {
                 s->counts[a]=s->target[a]; s->rpm[a]=0; s->flags[a]|=2u;
@@ -210,8 +210,11 @@ static void config_and_startup(void)
     Mechanism_DefaultConfig(&c);
 #if MECHANISM_TRIAL_RUN
     for (i=0u;i<3u;++i) CHECK(!Mechanism_ConfigIssues(&c,i));
-    CHECK(c.collision[0].rpm==24u && c.collision[1].rpm==60u &&
-        c.collision[2].rpm==180u && MECHANISM_NO_PROGRESS_MS==900u);
+    CHECK(c.collision[0].rpm==15u && c.collision[1].rpm==40u &&
+        c.collision[2].rpm==150u && MECHANISM_NO_PROGRESS_MS==1500u);
+    NEAR(c.axis[0].move_speed/c.axis[0].units_per_rev*60.0,20.0,0.01);
+    NEAR(c.axis[1].move_speed/c.axis[1].units_per_rev*60.0,60.0,0.01);
+    NEAR(c.axis[2].move_speed/c.axis[2].units_per_rev*60.0,200.0,0.01);
     CHECK(c.home[0].max_position==180.0f && c.observation_mm==10.0f &&
         c.grab_mm==140.0f && c.home[1].max_position>=c.grab_mm);
 #else
@@ -222,7 +225,7 @@ static void config_and_startup(void)
     s.online=0x7Fu; until_home(&s,60000u);
     CHECK(s.homes[5]==1u && s.homes[4]==1u && s.homes[6]==1u);
     CHECK(s.home_at[5]<s.home_at[4] && s.park_at[4]<s.home_at[6]);
-    CHECK(s.home_rpm[5]==60u && s.home_rpm[4]==24u && s.home_rpm[6]==180u);
+    CHECK(s.home_rpm[5]==40u && s.home_rpm[4]==15u && s.home_rpm[6]==150u);
     CHECK(s.home_backoff[5]==900u && s.home_backoff[6]==3600u);
     CHECK(s.bus.nodes[5].max_poll_gap_ms[1]<=MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS);
     CHECK(s.bus.nodes[4].max_poll_gap_ms[1]<=MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS);
@@ -235,7 +238,7 @@ static void config_and_startup(void)
 }
 static void home_paths(void)
 {
-    Sim s; unsigned a,mode;
+    Sim s; unsigned a,mode,i; uint8_t saw_arm,saw_trim,saw_lift;
     for (a=0u;a<3u;++a) for (mode=0u;mode<2u;++mode) {
         init(&s); if (mode) s.native[a]=0u;
         if (mode && a==MECH_ARM) s.counts[4]=0.0;
@@ -244,6 +247,14 @@ static void home_paths(void)
         until_home(&s,65000u);
         CHECK(s.homes[4+a]==1u);
         CHECK((s.aborts[4+a]>0u)==(mode!=0u));
+        saw_arm=saw_trim=saw_lift=0u;
+        for (i=0u;i<s.order_count;++i) {
+            if (s.order[i]==5u && s.order_rpm[i]==20u) saw_arm=1u;
+            if (s.order[i]==6u && s.order_rpm[i]==60u) saw_lift=1u;
+            if (s.order[i]==7u && s.order_rpm[i]==200u) saw_trim=1u;
+        }
+        CHECK(saw_arm && saw_trim);
+        if (mode && a==MECH_LIFT) CHECK(saw_lift);
         if (mode) {
             CHECK(s.mech.data.stop_confirm_ms>s.mech.data.stop_submit_ms);
             CHECK(s.park_at[4+a]>s.mech.data.stop_confirm_ms || a!=MECH_TRIM);
@@ -271,7 +282,7 @@ static void progress_observation(void)
     }
     CHECK(s.mech.data.state==MECH_COLLISION_HOME && !s.aborts[5]);
     while (s.mech.data.state!=MECH_CONTACT_STOP && s.now-start<2200u) run(&s,1u);
-    CHECK(s.mech.data.state==MECH_CONTACT_STOP && s.now-start>=900u);
+    CHECK(s.mech.data.state==MECH_CONTACT_STOP && s.now-start>=1500u);
     s.bias_counts[5]=0; until_home(&s,60000u);
     init(&s); s.native[1]=0u; s.counts[5]=0.0;
     while (!s.mech.progress_ms && s.now<10000u) run(&s,1u);

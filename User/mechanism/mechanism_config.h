@@ -43,21 +43,24 @@ typedef struct {
  * is zero for TRIM. Observation is the PR's physical old-coordinate
  * 0 mm (= nominal 10 mm from contact); its 130 mm grab point becomes
  * nominal 140 mm. These nominal positions need physical acceptance.
- * The three search speeds preserve main's fast homing values. */
-#define MECHANISM_NO_PROGRESS_MS 900u
+ * User revised 2026-11-06: search speeds 15/40/150 RPM; ordinary
+ * default speeds 20/60/200 RPM. move_speed stores degrees or mm/s.
+ * ARM 40 deg/s = 20 RPM; LIFT 40 mm/s = 60 RPM;
+ * TRIM 3.333333 mm/s = 200 RPM nominally. */
+#define MECHANISM_NO_PROGRESS_MS 1500u
 #define MECHANISM_MAX_PROGRESS_SAMPLE_GAP_MS 600u
 #define MECHANISM_LIFT_MM_PER_REV 40.0
 #define MECHANISM_TRIM_MM_PER_REV 1.0
 #define MECHANISM_TRIAL_PULSES_PER_REV 3200u
 #if MECHANISM_TRIAL_RUN
 #define MECHANISM_CALIBRATION { \
-    {{120.0,3200u,1.0f,24.1f,6.0f,1,1u,100u}, \
-     {40.0,3200u,0.05f,60.1f,10.0f,1,1u,100u}, \
-     {1.0,3200u,0.05f,180.1f,0.5f,1,1u,100u}}, \
+    {{120.0,3200u,1.0f,20.1f,40.0f,1,1u,100u}, \
+     {40.0,3200u,0.05f,60.1f,40.0f,1,1u,100u}, \
+     {1.0,3200u,0.05f,200.1f,3.333333f,1,1u,100u}}, \
     {{180.0f},{150.0f}}, \
-    {{24u,300u,800u,60u,120u,30000u,0.20f}, \
-     {60u,300u,800u,60u,900u,30000u,0.05f}, \
-     {180u,300u,800u,60u,3600u,25000u,0.02f}}, \
+    {{15u,300u,800u,60u,120u,30000u,0.20f}, \
+     {40u,300u,800u,60u,900u,30000u,0.05f}, \
+     {150u,300u,800u,60u,3600u,25000u,0.02f}}, \
     {50.0f},90.0f,10.5f,2.0f,10.0f,0.5f,140.0f,5.0f,5.0f,10000u,100u,500u }
 #else
 #define MECHANISM_CALIBRATION { \
@@ -65,9 +68,9 @@ typedef struct {
      {40.0,0u,0.05f,0.0f,0.0f,0,0u,100u}, \
      {1.0,0u,0.05f,0.0f,0.0f,0,0u,100u}}, \
     {{180.0f},{150.0f}}, \
-    {{24u,300u,800u,60u,120u,30000u,0.20f}, \
-     {60u,300u,800u,60u,900u,30000u,0.05f}, \
-     {180u,300u,800u,60u,3600u,25000u,0.02f}}, \
+    {{15u,300u,800u,60u,120u,30000u,0.20f}, \
+     {40u,300u,800u,60u,900u,30000u,0.05f}, \
+     {150u,300u,800u,60u,3600u,25000u,0.02f}}, \
     {50.0f},90.0f,10.5f,2.0f,10.0f,0.5f,140.0f,5.0f,5.0f,10000u,100u,500u }
 #endif
 enum { MECH_CFG_SCALE=1u, MECH_CFG_DIRECTION=2u, MECH_CFG_CONFIRM=4u,
