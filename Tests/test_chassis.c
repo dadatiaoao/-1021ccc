@@ -320,6 +320,10 @@ static void closed_tests(void)
     init(&s); CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_ACCEPTED);
     Chassis_Stop(&s.chassis,s.now); finish(&s,6000u); run(&s,3000u);
     CHECK(!s.groups && !s.chassis.pending_move_mm && s.chassis.data.result==CHASSIS_CANCELLED);
+    for (i=0u;i<2u;++i) {
+        init(&s); CHECK(Chassis_StartTurn(&s.chassis,i ? -90.0f : 90.0f,s.now)==CHASSIS_ACCEPTED);
+        finish(&s,20000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS); NEAR(s.angle,i ? -90 : 90,5);
+    }
     init(&s); ready(&s);
     CHECK(Chassis_RotateRelative(&s.chassis,270,30,s.now)==CHASSIS_ACCEPTED);
     finish(&s,40000u); CHECK(s.chassis.data.result==CHASSIS_SUCCESS); NEAR(s.angle,270,5.0);

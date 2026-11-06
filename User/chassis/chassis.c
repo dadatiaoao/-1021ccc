@@ -66,7 +66,7 @@ static void begin_stop(Chassis *c, ChassisResult result, ChassisReason why, uint
             fault->wheel=o->break_wheel;
         }
     }
-    c->pending_move_mm=0.0f;
+    c->pending_move_mm=c->pending_turn_deg=0.0f;
     if (c->data.state==CHASSIS_STOPPING) {
         if (result!=CHASSIS_SUCCESS) { c->stop_result=result; c->data.result=result; c->data.reason=why; }
         return;
@@ -181,10 +181,11 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle, float limit
     r=motion_ready(c,now,1u); if (r!=CHASSIS_ACCEPTED) return r;
     return begin_action(c,0.0f,0.0f,angle,limit,2u,now);
 }
-ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance, uint32_t now)
+static ChassisRequestResult start_motion(Chassis *c, float distance, float angle, uint32_t now)
 {
     ChassisRequestResult r;
-    if (!Chassis_Finite(distance) || distance==0.0f || fabs(distance)>10000.0)
+    if (!Chassis_Finite(distance) || (distance==0.0f && angle==0.0f) || fabs(distance)>10000.0 ||
+        !Chassis_Finite(angle) || fabs(angle)>360.0)
         return reject(c,CHASSIS_INVALID,CHASSIS_BAD_REQUEST);
     if (c->external_busy && *c->external_busy) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
@@ -195,12 +196,16 @@ ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance, uint3
         return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     r=Chassis_Prepare(c,now);
     if (r==CHASSIS_ACCEPTED) {
-        c->pending_move_mm=distance;
+        c->pending_move_mm=distance; c->pending_turn_deg=angle;
         c->data.target_x_mm=distance; c->data.target_y_mm=c->data.target_angle_deg=0.0f;
         c->action_gyro=c->gyro; c->odometry_generation=c->odometry.generation;
     }
     return r;
 }
+ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance, uint32_t now)
+{ return start_motion(c,distance,0.0f,now); }
+ChassisRequestResult Chassis_StartTurn(Chassis *c, float angle, uint32_t now)
+{ return start_motion(c,0.0f,angle,now); }
 static void prepare_process(Chassis *c, uint32_t now)
 {
     ChassisReason why=health(c,now,0u,1u);
@@ -307,7 +312,7 @@ void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
         c->observed_frames=c->bus->wheel_frames;
     }
     if (c->data.state==CHASSIS_PREPARING) prepare_process(c,now);
-    if (c->pending_move_mm!=0.0f) {
+    if ((c->pending_move_mm!=0.0f || c->pending_turn_deg!=0.0f)) {
         if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
         else if (!c->odometry.valid || c->odometry.generation!=c->odometry_generation)
@@ -323,18 +328,18 @@ void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
     if (c->data.state==CHASSIS_VELOCITY && due(now,c->input_deadline)) {
         begin_stop(c,CHASSIS_FAILED,CHASSIS_INPUT_EXPIRED,now); return;
     }
-    if (c->pending_move_mm!=0.0f || c->data.state==CHASSIS_VELOCITY || c->finite) {
+    if ((c->pending_move_mm!=0.0f || c->pending_turn_deg!=0.0f) || c->data.state==CHASSIS_VELOCITY || c->finite) {
         why=health(c,now,1u,(uint8_t)(c->data.state==CHASSIS_READY));
         /* Enable confirmation is asynchronous while preparing. */
         if (c->data.state!=CHASSIS_PREPARING && why!=CHASSIS_OK) {
             begin_stop(c,CHASSIS_FAILED,why,now); return;
         }
     }
-    if (c->pending_move_mm!=0.0f && c->data.state==CHASSIS_READY) {
-        float distance=c->pending_move_mm;
+    if ((c->pending_move_mm!=0.0f || c->pending_turn_deg!=0.0f) && c->data.state==CHASSIS_READY) {
+        float distance=c->pending_move_mm, angle=c->pending_turn_deg;
         ChassisRequestResult r;
-        c->pending_move_mm=0.0f;
-        r=begin_action(c,distance,0.0f,0.0f,c->config.max_speed_mm_s,1u,now);
+        c->pending_move_mm=c->pending_turn_deg=0.0f;
+        r=begin_action(c,distance,0.0f,angle,angle!=0.0f ? c->config.max_rate_deg_s : c->config.max_speed_mm_s,angle!=0.0f ? 2u : 1u,now);
         if (r!=CHASSIS_ACCEPTED) { begin_stop(c,CHASSIS_FAILED,c->data.rejection,now); return; }
     }
     if (c->finite) {

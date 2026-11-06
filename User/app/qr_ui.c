@@ -72,8 +72,10 @@ QrUiAction QrUi_Touch(QrUi *u,int32_t x,int32_t y,uint8_t down)
         else if (hit(x,y,8,196,140,30)) return QR_UI_MECH_HOME;
         else if (hit(x,y,160,196,140,30)) return QR_UI_MECH_TEST;
     } else if (u->page==UI_CHASSIS && u->more) {
-        if (hit(x,y,8,196,216,30)) return QR_UI_CHASSIS_FORWARD;
-        if (hit(x,y,248,196,224,30)) return QR_UI_CHASSIS_BACKWARD;
+        if (hit(x,y,8,170,216,26)) return QR_UI_CHASSIS_FORWARD;
+        if (hit(x,y,248,170,224,26)) return QR_UI_CHASSIS_BACKWARD;
+        if (hit(x,y,8,200,216,26)) return QR_UI_CHASSIS_LEFT;
+        if (hit(x,y,248,200,224,26)) return QR_UI_CHASSIS_RIGHT;
     }
     else if (u->page==UI_GYRO && !u->more && hit(x,y,8,196,140,30)) return QR_UI_GYRO_CAL;
     else if (u->page==UI_GYRO && !u->more && hit(x,y,160,196,140,30)) return QR_UI_GYRO_ZERO;
@@ -210,15 +212,17 @@ static void chassis(QrUi *u,uint32_t now)
         row(u,7u,/* 打滑不可观测，断链后重新建立坐标段 */ "\346\211\223\346\273\221\344\270\215\345\217\257\350\247\202\346\265\213\357\274\214\346\226\255\351\223\276\345\220\216\351\207\215\346\226\260\345\273\272\347\253\213\345\235\220\346\240\207\346\256\265"); return;
     }
     snprintf(t,sizeof(t),"%s / %s",Chassis_StateName(d->state),results[d->result]); row(u,0u,t);
-    for (i=0u;i<4u;++i) {
-        const MotorNode *n=&c->bus->nodes[i];
-        if (MotorBus_Fresh(n,MOTOR_VALID_SPEED,now)) snprintf(v,sizeof(v),"%ld",(long)n->data.speed_rpm); else strcpy(v,"--");
-        snprintf(t,sizeof(t),"%s CMD:%ld RPM:%s %s",MotorBus_Role((uint8_t)(i+1u)),(long)d->wheels.quantized[i],v,node_state(n,now)); row(u,i+1u,t);
+    for (i=0u;i<2u;++i) {
+        snprintf(t,sizeof(t),"%s:%ld/%ld %s:%ld/%ld RPM",
+            MotorBus_Role((uint8_t)(i*2u+1u)),(long)d->wheels.quantized[i*2u],(long)d->measured_rpm[i*2u],
+            MotorBus_Role((uint8_t)(i*2u+2u)),(long)d->wheels.quantized[i*2u+1u],(long)d->measured_rpm[i*2u+1u]); row(u,i+1u,t);
     }
     snprintf(t,sizeof(t),"%.20s / %.18s",Chassis_ReasonName(d->reason!=CHASSIS_OK ? d->reason : d->rejection),
-        d->fault.valid ? Chassis_OdometryIssueName(d->fault.issue) : Chassis_OdometryIssueName(c->odometry.last_issue)); row(u,5u,t);
-    (void)item(u,8,196,216,30,1,"\345\211\215\350\277\233\063\060cm");
-    (void)item(u,248,196,224,30,1,"\345\220\216\351\200\200\063\060cm");
+        d->fault.valid ? Chassis_OdometryIssueName(d->fault.issue) : Chassis_OdometryIssueName(c->odometry.last_issue)); row(u,4u,t);
+    (void)item(u,8,170,216,26,1,"\345\211\215\350\277\233\063\060cm");
+    (void)item(u,248,170,224,26,1,"\345\220\216\351\200\200\063\060cm");
+    (void)item(u,8,200,216,26,1,"\345\267\246\350\275\254\071\060\345\272\246");
+    (void)item(u,248,200,224,26,1,"\345\217\263\350\275\254\071\060\345\272\246");
 }
 static void mechanism(QrUi *u,uint32_t now)
 {

@@ -606,12 +606,12 @@ static void test_gyro_button_calibration(void)
     CHECK(a.gyro.data.calibration==GYRO_CAL_RUNNING && !a.gyro.data.angle_valid);
     advance(&a,2300u); /* Holding CAL across completion must not restart it. */
     CHECK(a.gyro.data.cal_requests==requests+1u && a.gyro.data.calibration==GYRO_CAL_DONE);
-    CHECK(a.gyro.data.bias_dps>15.85f && a.gyro.data.bias_dps<15.87f);
+    CHECK(GYRO_SIGN*a.gyro.data.bias_dps>15.85f && GYRO_SIGN*a.gyro.data.bias_dps<15.87f);
     CHECK(a.gyro.data.rate_dps==0.0f && a.gyro.data.angle_deg==0.0 && a.gyro.data.angle_valid);
     touch_down=0u; advance(&a,1u);
     GyroTest_Raw(GYRO_AXIS,1179); press(&a,40,210); advance(&a,2400u);
     CHECK(a.gyro.data.cal_requests==requests+2u && a.gyro.data.calibration==GYRO_CAL_DONE);
-    CHECK(a.gyro.data.bias_dps==18.0f && a.gyro.data.rate_dps==0.0f);
+    CHECK(a.gyro.data.bias_dps==GYRO_SIGN*18.0f && a.gyro.data.rate_dps==0.0f);
     CHECK(a.gyro.data.angle_deg==0.0 && app_motor.count==commands);
     CHECK(contains(&a.ui,"CAL:OK") && !contains(&a.ui,"FIXED"));
     puts("PASS: CAL button measures large bias, hold deduplicates, repeat replaces bias without motor commands");
@@ -649,14 +649,14 @@ static void test_actions(void)
     press(&a,200,210); CHECK(a.mechanism.data.request_id==request);
     press(&a,140,248); press(&a,420,18); a.chassis.config.mechanical_confirmed=0;
     request=a.chassis.data.request_id; before=app_motor.count;
-    press(&a,40,210); CHECK(a.chassis.data.rejection==CHASSIS_CONFIG && a.chassis.data.request_id==request);
+    press(&a,40,182); CHECK(a.chassis.data.rejection==CHASSIS_CONFIG && a.chassis.data.request_id==request);
     CHECK(app_motor.count==before);
     a.chassis.config.mechanical_confirmed=1u;
-    advance(&a,1000u); press(&a,40,210); advance(&a,700u);
+    advance(&a,1000u); press(&a,40,182); advance(&a,700u);
     CHECK(a.chassis.data.target_x_mm==300.0f && a.chassis.data.state==CHASSIS_MOVING);
     request=a.chassis.data.request_id;
-    press(&a,40,210); CHECK(a.chassis.data.request_id==request); /* no restart */
-    press(&a,280,210); CHECK(a.chassis.data.request_id==request && a.chassis.data.target_x_mm==300.0f);
+    press(&a,40,182); CHECK(a.chassis.data.request_id==request); /* no restart */
+    press(&a,280,182); CHECK(a.chassis.data.request_id==request && a.chassis.data.target_x_mm==300.0f);
     press(&a,40,248); press(&a,200,120); zeros=a.gyro.data.zeros;
     press(&a,200,210); CHECK(a.gyro.data.zeros==zeros && a.chassis.data.rejection==CHASSIS_AXIS_BUSY);
     CHECK(contains(&a.ui,"ZERO REJECT: CHASSIS BUSY")); validate_widgets(&a.ui);
@@ -665,10 +665,10 @@ static void test_actions(void)
     press(&a,420,248); advance(&a,1800u);
     CHECK(a.chassis.data.result==CHASSIS_CANCELLED && !a.motor.wheels_pending);
     for(i=0u;i<7u;++i) CHECK(!a.motor.nodes[i].stop_unconfirmed);
-    press(&a,140,248); press(&a,420,18); press(&a,280,210); advance(&a,700u);
+    press(&a,140,248); press(&a,420,18); press(&a,280,182); advance(&a,700u);
     CHECK(a.chassis.data.state==CHASSIS_MOVING && a.chassis.data.target_x_mm==-300.0f);
     request=a.chassis.data.request_id;
-    touch_x=479-280; touch_y=271-210; touch_down=1u; advance(&a,300u);
+    touch_x=479-280; touch_y=271-182; touch_down=1u; advance(&a,300u);
     CHECK(a.chassis.data.request_id==request); touch_down=0u; advance(&a,1u);
     press(&a,420,248); advance(&a,1800u);
     CHECK(!Chassis_OwnsWheels(&a.chassis) && !a.chassis.pending_move_mm);

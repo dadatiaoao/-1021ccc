@@ -40,7 +40,7 @@ typedef struct {
     ChassisOdometry odometry;
     GyroSnapshot gyro, action_gyro;
     double origin_x, origin_y, origin_angle;
-    float action_limit, pending_move_mm; /* one straight move after asynchronous enable */
+    float action_limit, pending_move_mm, pending_turn_deg; /* one straight move after asynchronous enable */
     uint32_t input_deadline, deadline, control_ms, publish_ms, stop_ms;
     uint32_t stable_since, stable_odometry_seq, stable_gyro_seq, odometry_generation;
     uint32_t verify_ms, last_submitted, observed_frames;
@@ -65,6 +65,7 @@ int Chassis_OwnsWheels(const Chassis *c);
  * +300 mm = UI forward, -300 mm = UI backward; directions confirmed by user
  * on 2026-11-05. This does not establish distance accuracy or heading stability. */
 ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance_mm, uint32_t now_ms);
+ChassisRequestResult Chassis_StartTurn(Chassis *c, float angle_deg, uint32_t now_ms);
 const char *Chassis_StateName(ChassisState state);
 const char *Chassis_ReasonName(ChassisReason reason);
 #endif
