@@ -12,8 +12,13 @@
 #define CHASSIS_GEAR_RATIO 1.0f /* motor revolutions / wheel revolution */
 #define CHASSIS_MOTOR_SIGNS {1, -1, 1, -1} /* Addresses 1..4; forward/backward button directions confirmed by user, 2026-11-05. */
 
+#define CHASSIS_LEFT_TRAVEL_SCALE 1.0f
+#define CHASSIS_RIGHT_TRAVEL_SCALE 1.0f
+#define CHASSIS_GYRO_STARTUP_TIMEOUT_MS 2000u
+
 typedef struct {
     float wheel_diameter_mm, length_mm, width_mm, gear_ratio;
+    float left_travel_scale, right_travel_scale; /* actual circumference / nominal */
     float max_rpm, max_speed_mm_s, max_rate_deg_s;
     float acceleration_mm_s2, acceleration_deg_s2;
     float position_kp, heading_kp, rate_damping;

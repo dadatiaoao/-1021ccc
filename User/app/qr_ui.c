@@ -212,6 +212,7 @@ static void chassis(QrUi *u,uint32_t now)
         row(u,7u,/* 打滑不可观测，断链后重新建立坐标段 */ "\346\211\223\346\273\221\344\270\215\345\217\257\350\247\202\346\265\213\357\274\214\346\226\255\351\223\276\345\220\216\351\207\215\346\226\260\345\273\272\347\253\213\345\235\220\346\240\207\346\256\265"); return;
     }
     snprintf(t,sizeof(t),"%s / %s",Chassis_StateName(d->state),results[d->result]); row(u,0u,t);
+    row(u,3u,d->wheel_only ? "ENCODER ONLY / NO GYRO" : "GYRO HEADING / CAL REQUIRED IF UNCAL");
     for (i=0u;i<2u;++i) {
         snprintf(t,sizeof(t),"%s:%ld/%ld %s:%ld/%ld RPM",
             MotorBus_Role((uint8_t)(i*2u+1u)),(long)d->wheels.quantized[i*2u],(long)d->measured_rpm[i*2u],

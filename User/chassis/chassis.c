@@ -12,6 +12,11 @@ int Chassis_OwnsWheels(const Chassis *c)
     return c->data.state!=CHASSIS_DISARMED &&
         c->data.state!=CHASSIS_READY && c->data.state!=CHASSIS_FAULT;
 }
+static int heading_valid(const Chassis *c,uint32_t now)
+{
+    return c->data.wheel_only ? c->odometry.valid && now-c->odometry.sample_ms<=MOTOR_BUS_FRESH_MS :
+        Chassis_GyroValid(&c->gyro,now);
+}
 static int stopped(const Chassis *c)
 {
     unsigned i;
@@ -47,7 +52,7 @@ void Chassis_Init(Chassis *c, MotorBus *bus, const ChassisConfig *config, uint32
 {
     memset(c,0,sizeof(*c)); c->bus=bus;
     if (config) c->config=*config; else Chassis_DefaultConfig(&c->config);
-    c->control_ms=c->publish_ms=now;
+    c->startup_ms=now; c->control_ms=c->publish_ms=now;
     c->data.config_issues=Chassis_ConfigIssues(&c->config,1u);
 }
 static void begin_stop(Chassis *c, ChassisResult result, ChassisReason why, uint32_t now)
@@ -146,7 +151,7 @@ static ChassisRequestResult begin_action(Chassis *c, float x, float y, float ang
     float limit, uint8_t kind, uint32_t now)
 {
     double seconds, distance=sqrt((double)x*x+(double)y*y);
-    if (!Chassis_GyroValid(&c->gyro,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
+    if (!heading_valid(c,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
     if (kind==1u && (!c->odometry.valid || now-c->odometry.sample_ms>MOTOR_BUS_FRESH_MS))
         return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     request_id(c); c->finite=kind; c->have_origin=1u; c->action_limit=limit; c->action_gyro=c->gyro;
@@ -191,7 +196,7 @@ static ChassisRequestResult start_motion(Chassis *c, float distance, float angle
     if (Chassis_OwnsWheels(c)) return reject(c,CHASSIS_BUSY,CHASSIS_AXIS_BUSY);
     c->data.config_issues=Chassis_ConfigIssues(&c->config,1u);
     if (c->data.config_issues) return reject(c,CHASSIS_INVALID,CHASSIS_CONFIG);
-    if (!Chassis_GyroValid(&c->gyro,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
+    if (!heading_valid(c,now)) return reject(c,CHASSIS_NOT_READY,CHASSIS_GYRO_INVALID);
     if (!c->odometry.valid || now-c->odometry.sample_ms>MOTOR_BUS_FRESH_MS)
         return reject(c,CHASSIS_NOT_READY,CHASSIS_ODOMETRY_INVALID);
     r=Chassis_Prepare(c,now);
@@ -288,12 +293,31 @@ static void slew(Chassis *c, ChassisVelocity target, float dt)
 void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
 {
     unsigned i; ChassisReason why; uint32_t lease;
-    c->gyro=*g;
-    Chassis_OdometryProcess(&c->odometry,&c->config,c->bus,g,now);
+    GyroSnapshot encoder_heading;
+    /* A raw sample proves startup communication, not calibration. Never switch
+       sources after successful startup or during a motion. */
+    if (!c->startup_decided) {
+        if (g->state==GYRO_RUNNING && (g->raw_valid || Chassis_GyroValid(g,now)) && g->have_sample) c->startup_decided=1u;
+        else if (now-c->startup_ms>=CHASSIS_GYRO_STARTUP_TIMEOUT_MS && !Chassis_OwnsWheels(c)) {
+            c->startup_decided=1u; c->data.wheel_only=1u;
+            memset(&c->odometry,0,sizeof(c->odometry));
+        }
+    }
     c->data.gyro_valid=(uint8_t)Chassis_GyroValid(g,now);
+    Chassis_OdometryProcess(&c->odometry,&c->config,c->bus,c->data.wheel_only ? 0 : g,now);
+    if (c->data.wheel_only) {
+        /* Internal heading adapter only; the real gyro snapshot/UI is unchanged. */
+        memset(&encoder_heading,0,sizeof(encoder_heading));
+        encoder_heading.angle_deg=c->odometry.angle; encoder_heading.rate_dps=(float)c->odometry.rate;
+        encoder_heading.sample_ms=c->odometry.sample_ms; encoder_heading.sequence=c->odometry.sequence;
+        encoder_heading.gaps=c->odometry.generation;
+        g=&encoder_heading;
+    }
+    c->gyro=*g;
+    c->data.heading_valid=(uint8_t)heading_valid(c,now);
     c->data.odometry_valid=c->odometry.valid;
     if (c->have_origin) pose(c);
-    c->data.pose_valid=(uint8_t)(c->have_origin && c->data.gyro_valid && c->odometry.valid &&
+    c->data.pose_valid=(uint8_t)(c->have_origin && c->data.heading_valid && c->odometry.valid &&
         c->odometry.generation==c->odometry_generation && Chassis_GyroContinuous(&c->action_gyro,g));
     c->data.feedback_age_ms=0u;
     for (i=0u;i<4u;++i) {
@@ -313,13 +337,13 @@ void Chassis_Process(Chassis *c, const GyroSnapshot *g, uint32_t now)
     }
     if (c->data.state==CHASSIS_PREPARING) prepare_process(c,now);
     if ((c->pending_move_mm!=0.0f || c->pending_turn_deg!=0.0f)) {
-        if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
+        if (!c->data.heading_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
         else if (!c->odometry.valid || c->odometry.generation!=c->odometry_generation)
             begin_stop(c,CHASSIS_FAILED,CHASSIS_ODOMETRY_INVALID,now);
     }
     if (c->finite) {
-        if (!c->data.gyro_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
+        if (!c->data.heading_valid) begin_stop(c,CHASSIS_FAILED,CHASSIS_GYRO_INVALID,now);
         else if (!Chassis_GyroContinuous(&c->action_gyro,g)) begin_stop(c,CHASSIS_FAILED,CHASSIS_SENSOR_CHANGED,now);
         else if (c->finite==1u && (!c->odometry.valid || c->odometry.generation!=c->odometry_generation))
             begin_stop(c,CHASSIS_FAILED,CHASSIS_ODOMETRY_INVALID,now);

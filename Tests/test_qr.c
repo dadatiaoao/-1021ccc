@@ -672,6 +672,14 @@ static void test_actions(void)
     CHECK(a.chassis.data.request_id==request); touch_down=0u; advance(&a,1u);
     press(&a,420,248); advance(&a,1800u);
     CHECK(!Chassis_OwnsWheels(&a.chassis) && !a.chassis.pending_move_mm);
+    for (i=0u;i<2u;++i) {
+        press(&a,140,248); press(&a,420,18); press(&a,i ? 280 : 40,210); advance(&a,700u);
+        CHECK(a.chassis.data.state==CHASSIS_ROTATING && a.chassis.data.target_angle_deg==(i ? -90.0f : 90.0f));
+        request=a.chassis.data.request_id;
+        press(&a,40,210); CHECK(a.chassis.data.request_id==request);
+        press(&a,420,248); advance(&a,1800u);
+        CHECK(!Chassis_OwnsWheels(&a.chassis) && !a.chassis.pending_turn_deg);
+    }
     press(&a,40,248); press(&a,200,120);
     press(&a,200,210); CHECK(!a.ui.gyro_notice && a.gyro.data.zeros==zeros+1u);
     CHECK(!contains(&a.ui,"REJECT:"));

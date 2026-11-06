@@ -75,10 +75,10 @@ void Chassis_OdometryProcess(ChassisOdometry *o, const ChassisConfig *c,
 {
     double counts[4], distance[4], angle, dx, dy, middle, factor;
     uint32_t age=0u, time; unsigned i;
-    if (!Chassis_GyroValid(g,now)) { invalidate(o,CHASSIS_ODOM_GYRO_INVALID,0u,now); return; }
-    if (o->gyro_count && !Chassis_GyroContinuous(&o->gyro_guard,g))
+    if (g && !Chassis_GyroValid(g,now)) { invalidate(o,CHASSIS_ODOM_GYRO_INVALID,0u,now); return; }
+    if (g && o->gyro_count && !Chassis_GyroContinuous(&o->gyro_guard,g))
         invalidate(o,CHASSIS_ODOM_GYRO_CHANGED,0u,now);
-    o->gyro_guard=*g; gyro_add(o,g);
+    if (g) { o->gyro_guard=*g; gyro_add(o,g); }
     if (Chassis_ConfigIssues(c,1u)) { invalidate(o,CHASSIS_ODOM_CONFIG,0u,now); return; }
     for (i=0u;i<4u;++i) {
         const MotorNode *n=&bus->nodes[i];
@@ -118,16 +118,21 @@ void Chassis_OdometryProcess(ChassisOdometry *o, const ChassisConfig *c,
         if (o->baseline) invalidate(o,CHASSIS_ODOM_SYNC_TIMEOUT,(uint8_t)(i+1u),now);
         return;
     }
-    if (!gyro_at(o,g,time,&angle)) {
+    angle=o->baseline ? o->angle : 0.0;
+    if (g && !gyro_at(o,g,time,&angle)) {
         if (o->baseline) invalidate(o,CHASSIS_ODOM_SYNC_TIMEOUT,0u,now);
         return;
     }
-    if (!o->baseline) { o->x=o->y=0.0; o->baseline=1u; }
+    if (!o->baseline) { o->x=o->y=o->rate=0.0; o->baseline=1u; }
     else {
         factor=PI*(double)c->wheel_diameter_mm/(65536.0*(double)c->gear_ratio);
-        for (i=0u;i<4u;++i) distance[i]=(counts[i]-o->previous_counts[i])*factor*c->motor_sign[i];
+        for (i=0u;i<4u;++i) distance[i]=(counts[i]-o->previous_counts[i])*factor*c->motor_sign[i]*
+            ((i & 1u) ? c->right_travel_scale : c->left_travel_scale);
         dx=(distance[0]+distance[1]+distance[2]+distance[3])*0.25;
         dy=(-distance[0]+distance[1]+distance[2]-distance[3])*0.25;
+        if (!g) angle=o->angle+(-distance[0]+distance[1]-distance[2]+distance[3])/
+            (2.0*((double)c->length_mm+(double)c->width_mm))/RAD;
+        o->rate=(angle-o->angle)*1000.0/(time-o->sample_ms);
         middle=(o->angle+angle)*0.5*RAD;
         o->x+=cos(middle)*dx-sin(middle)*dy;
         o->y+=sin(middle)*dx+cos(middle)*dy;

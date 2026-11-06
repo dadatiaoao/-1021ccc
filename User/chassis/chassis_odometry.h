@@ -20,7 +20,7 @@ typedef struct {
     ChassisWheelPoint wheel[4][CHASSIS_WHEEL_HISTORY];
     ChassisGyroPoint gyro[CHASSIS_GYRO_HISTORY];
     GyroSnapshot gyro_guard;
-    double previous_counts[4], x, y, angle;
+    double previous_counts[4], x, y, angle, rate;
     uint32_t generation, sequence, sample_ms;
     ChassisOdometryIssue last_issue;
     uint32_t break_ms, break_age_ms;
@@ -29,6 +29,7 @@ typedef struct {
 } ChassisOdometry;
 int Chassis_GyroValid(const GyroSnapshot *g, uint32_t now);
 int Chassis_GyroContinuous(const GyroSnapshot *a, const GyroSnapshot *b);
+/* g == NULL explicitly selects encoder-only yaw; mode must not change in motion. */
 void Chassis_OdometryProcess(ChassisOdometry *o, const ChassisConfig *c,
     const MotorBus *bus, const GyroSnapshot *g, uint32_t now);
 const char *Chassis_OdometryIssueName(ChassisOdometryIssue issue);

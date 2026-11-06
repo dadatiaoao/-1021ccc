@@ -29,6 +29,7 @@ typedef struct {
     int32_t measured_rpm[4];
     uint32_t request_id, config_issues, publish_accepted, publish_rejected;
     uint32_t submitted_frames, last_submit_ms, max_submit_gap_ms, feedback_age_ms;
+    uint8_t wheel_only, heading_valid; /* gyro_valid remains actual sensor status */
     uint8_t pose_valid, gyro_valid, odometry_valid, stop_pending;
     ChassisFault fault; /* first failure evidence; live recovery never clears it */
 } ChassisSnapshot;
@@ -46,7 +47,8 @@ typedef struct {
     uint32_t verify_ms, last_submitted, observed_frames;
     ChassisResult stop_result;
     uint8_t finite, stable, verifying, enable_wait, have_origin;
-    uint8_t enable_index;
+    uint8_t enable_index, startup_decided;
+    uint32_t startup_ms;
 } Chassis;
 void Chassis_Init(Chassis *c, MotorBus *bus, const ChassisConfig *config, uint32_t now_ms);
 /* Config is copied. Keep it unchanged while armed; apply measured changes by

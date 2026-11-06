@@ -15,6 +15,7 @@ void Chassis_DefaultConfig(ChassisConfig *c)
     c->wheel_diameter_mm=CHASSIS_WHEEL_DIAMETER_MM;
     c->length_mm=CHASSIS_LENGTH_MM; c->width_mm=CHASSIS_WIDTH_MM;
     c->gear_ratio=CHASSIS_GEAR_RATIO; memcpy(c->motor_sign, signs, sizeof(signs));
+    c->left_travel_scale=CHASSIS_LEFT_TRAVEL_SCALE; c->right_travel_scale=CHASSIS_RIGHT_TRAVEL_SCALE;
     c->max_rpm=60.0f; c->max_speed_mm_s=100.0f; c->max_rate_deg_s=30.0f;
     c->acceleration_mm_s2=200.0f; c->acceleration_deg_s2=60.0f;
     c->position_kp=1.5f; c->heading_kp=2.0f; c->rate_damping=0.2f;
@@ -33,7 +34,9 @@ uint32_t Chassis_ConfigIssues(const ChassisConfig *c, uint8_t closed)
         !positive(c->width_mm) || c->width_mm>10000.0f ||
         !positive(c->gear_ratio) || c->gear_ratio>10000.0f) bad|=CHASSIS_CFG_GEOMETRY;
     for (i=0u;i<4u;++i) if (c->motor_sign[i]!=1 && c->motor_sign[i]!=-1) bad|=CHASSIS_CFG_DIRECTION;
-    if (!positive(c->max_rpm) || c->max_rpm>3000.0f ||
+    if (!positive(c->left_travel_scale) || c->left_travel_scale<0.5f || c->left_travel_scale>1.5f ||
+        !positive(c->right_travel_scale) || c->right_travel_scale<0.5f || c->right_travel_scale>1.5f ||
+        !positive(c->max_rpm) || c->max_rpm>3000.0f ||
         !positive(c->max_speed_mm_s) || c->max_speed_mm_s>10000.0f ||
         !positive(c->max_rate_deg_s) || c->max_rate_deg_s>360.0f ||
         !positive(c->acceleration_mm_s2) || c->acceleration_mm_s2>10000.0f ||
@@ -65,6 +68,7 @@ int Chassis_Solve(const ChassisConfig *c, ChassisVelocity v, ChassisWheels *o)
     f=60.0*(double)c->gear_ratio/(PI*(double)c->wheel_diameter_mm);
     r[0]=(v.vx-v.vy-k*w)*f; r[1]=(v.vx+v.vy+k*w)*f;
     r[2]=(v.vx+v.vy-k*w)*f; r[3]=(v.vx-v.vy+k*w)*f;
+    for (i=0u;i<4u;++i) r[i]/=(i & 1u) ? c->right_travel_scale : c->left_travel_scale;
     for (i=0u;i<4u;++i) if (fabs(r[i])>maximum) maximum=fabs(r[i]);
     scale=maximum>c->max_rpm ? c->max_rpm/maximum : 1.0;
     o->scale=(float)scale; o->limited.vx=(float)(v.vx*scale);

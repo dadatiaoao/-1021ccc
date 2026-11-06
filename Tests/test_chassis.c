@@ -399,8 +399,39 @@ static void result_tests(void)
     run(&s,12000u); CHECK(!s.groups && s.chassis.data.state==CHASSIS_STOPPING);
     puts("PASS: post-STOP error recheck, failure latch, unconfirmed STOP/retry, preparation rebase, enable/missing-wheel rejection");
 }
+static void encoder_fallback_tests(void)
+{
+    Sim s; unsigned i; ChassisWheels w; ChassisVelocity v={50,0,0};
+    for (i=0u;i<4u;++i) {
+        init(&s);
+        Chassis_Init(&s.chassis,&s.bus,&s.cfg,s.now);
+        s.gyro.state=GYRO_ERROR; s.gyro.raw_valid=s.gyro.angle_valid=s.gyro.rate_valid=0u;
+        run(&s,1900u); CHECK(!s.chassis.data.wheel_only);
+        run(&s,1200u); CHECK(s.chassis.data.wheel_only && s.chassis.data.heading_valid && !s.chassis.data.gyro_valid);
+        if (i<2u) CHECK(Chassis_StartStraightMove(&s.chassis,i ? -300.0f : 300.0f,s.now)==CHASSIS_ACCEPTED);
+        else CHECK(Chassis_StartTurn(&s.chassis,i==2u ? 90.0f : -90.0f,s.now)==CHASSIS_ACCEPTED);
+        finish(&s,25000u);
+        CHECK(s.chassis.data.result==CHASSIS_SUCCESS);
+        if (i<2u) NEAR(s.x,i ? -300 : 300,20); else NEAR(s.angle,i==2u ? 90 : -90,5);
+        /* Sensor recovery cannot change the latched source. */
+        s.gyro.state=GYRO_RUNNING; s.gyro.angle_valid=s.gyro.rate_valid=1u;
+        run(&s,200u); CHECK(s.chassis.data.wheel_only);
+        CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_ACCEPTED);
+        s.freeze_position=1u; run(&s,4000u);
+        CHECK(s.chassis.data.result==CHASSIS_FAILED && !s.chassis.pending_move_mm);
+    }
+    init(&s); Chassis_Init(&s.chassis,&s.bus,&s.cfg,s.now);
+    s.gyro.raw_valid=1u; s.gyro.calibrated=s.gyro.angle_valid=s.gyro.rate_valid=0u;
+    run(&s,4000u); CHECK(!s.chassis.data.wheel_only && !s.chassis.data.heading_valid);
+    CHECK(Chassis_StartStraightMove(&s.chassis,300,s.now)==CHASSIS_NOT_READY);
+    s.cfg.left_travel_scale=1.1f;
+    CHECK(Chassis_Solve(&s.cfg,v,&w));
+    NEAR(w.rpm[0]*1.1,-w.rpm[1],0.001);
+    s.cfg.left_travel_scale=0; CHECK(Chassis_ConfigIssues(&s.cfg,1u));
+    puts("PASS: startup encoder fallback, four moves, latch after recovery, wheel loss STOP, UNCAL gate and travel scales");
+}
 int main(void)
 {
-    kinematics(); odometry_tests(); velocity_tests(); closed_tests(); faults(); result_tests(); fault_evidence_tests();
+    encoder_fallback_tests(); kinematics(); odometry_tests(); velocity_tests(); closed_tests(); faults(); result_tests(); fault_evidence_tests();
     printf("PASS: %u chassis checks (software and simulation; no physical acceptance)\n",checks); return 0;
 }
