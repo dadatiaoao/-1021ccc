@@ -1,0 +1,17 @@
+{
+  "status": "UNMEASURED_TEMPLATE_NOT_LOADED_BY_RUNTIME",
+  "model_role": "YOLO whole numbered station; scoring ring index is unknown",
+  "camera_pose_id": null,
+  "camera_height_mm": null,
+  "target_plane_height_mm": null,
+  "target_number": null,
+  "sample_file": null,
+  "pick_roi_ai_pixels": null,
+  "ring_roi_ai_pixels": null,
+  "hough_threshold": null,
+  "box_center_error_pixels": null,
+  "refined_center_error_pixels": null,
+  "external_landing_error_mm": null,
+  "repeat_trials": [],
+  "notes": "Do not enable calibration flags from synthetic tests. Measure ground and stacking top planes separately."
+}
