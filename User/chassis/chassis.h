@@ -61,7 +61,9 @@ ChassisRequestResult Chassis_RotateRelative(Chassis *c, float angle_deg, float m
 void Chassis_Stop(Chassis *c, uint32_t now_ms);
 void Chassis_GetSnapshot(const Chassis *c, ChassisSnapshot *out);
 int Chassis_OwnsWheels(const Chassis *c);
-/* Prepare wheels, then move once along local X; positive is forward, negative backward. */
+/* Prepare wheels, then move once along local X at motion start.
+ * +300 mm = UI forward, -300 mm = UI backward; directions confirmed by user
+ * on 2026-11-05. This does not establish distance accuracy or heading stability. */
 ChassisRequestResult Chassis_StartStraightMove(Chassis *c, float distance_mm, uint32_t now_ms);
 const char *Chassis_StateName(ChassisState state);
 const char *Chassis_ReasonName(ChassisReason reason);

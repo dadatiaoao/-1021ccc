@@ -8,7 +8,7 @@
 #define GYRO_AXIS 2 /* 0=X, 1=Y, 2=Z; verify the installed vertical axis. */
 #endif
 #ifndef GYRO_SIGN
-#define GYRO_SIGN 1
+#define GYRO_SIGN -1
 #endif
 #if GYRO_AXIS < 0 || GYRO_AXIS > 2 || (GYRO_SIGN != 1 && GYRO_SIGN != -1)
 #error Invalid gyro mounting configuration

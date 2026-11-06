@@ -10,7 +10,7 @@
 #define CHASSIS_LENGTH_MM 216.0f
 #define CHASSIS_WIDTH_MM 218.6f
 #define CHASSIS_GEAR_RATIO 1.0f /* motor revolutions / wheel revolution */
-#define CHASSIS_MOTOR_SIGNS {1, -1, 1, -1} /* fixed addresses 1..4; rear is now forward */
+#define CHASSIS_MOTOR_SIGNS {1, -1, 1, -1} /* Addresses 1..4; forward/backward button directions confirmed by user, 2026-11-05. */
 
 typedef struct {
     float wheel_diameter_mm, length_mm, width_mm, gear_ratio;
