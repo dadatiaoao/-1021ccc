@@ -1,6 +1,8 @@
 # 文档索引与维护状态
 
-更新：2026-11-05。按键校准改动基于 `main / f75e0ca`；其余源码核对基线：`main / f14be37`。主线已包含原电机里程计开发分支；旧主线 `01c8a68` 保存在 `archive/main-before-odometry`。
+更新：2026-11-06。机构第一阶段以 `main / 1c464da` 为基线，当前行为优先见下方第一阶段说明；本文其余日期段落保留相应版本的背景。旧主线 `01c8a68` 保存在 `archive/main-before-odometry`。
+
+2026-11-06：5/6/7 三轴碰撞回零、七机就绪门控、1500 ms 有效反馈无进展判定、最终 90°/约 10 mm/中点停放已写入现有机构模块。原 PG2/PG3 只显示。主机回归和 LCD 主工程重建通过；新集成尚待实机验收。详见[第一阶段说明](MECHANISM_COLLISION_STAGE1_2026-11-06.md)。
 
 软件行为以实际源码及默认配置为准；需求规划不能写成已实现能力，源码也不能证明实物验收。历史测试只对应记录中的版本，不因文档日期更新而成为本次测试结果。外部赛事资料、厂家手册和其他工程未在本次重新核验。
 
@@ -17,8 +19,9 @@
 | 文档 | 用途与范围 |
 |---|---|
 | [工程 README](../README.md) | 当前能力、上电/操作行为、配置入口、用户确认和待验事项 |
+| [三轴碰撞回零第一阶段](MECHANISM_COLLISION_STAGE1_2026-11-06.md) | 当前机构零点、1500 ms 判定、完整停放、软件验证与实机待办 |
 | [底盘电机里程计](CHASSIS_MOTOR_ODOMETRY_2026-10-24.md) | 当前反馈与故障边界；初版资源、测试与 HEX 单独保留为历史 |
-| [机构标定记录](MECHANISM_CALIBRATION_TODO_2026-10-25.md) | 当前 5/6/7 轴参数、回零条件、标定待办与分日期实测记录 |
+| [机构标定记录](MECHANISM_CALIBRATION_TODO_2026-10-25.md) | 历史 5/6/7 轴实测与旧方案记录；顶部指向当前第一阶段标定入口 |
 | [UI 说明](UI_REDESIGN_2026-10-24.md) | 当前页面和操作；2026-10-24 截图不能代表后来新增页面 |
 | [比赛框架说明](../User/mission/README.md) | 已实现的纯调度、空执行端、计数、超时及后续接入边界 |
 | [行为层总计划](BEHAVIOR_MASTER_PLAN_2026-10-22.md) | 保留比赛目标与后续设计；顶部进度表区分已实现基础和未接入部分，旧交接内容不是执行授权 |
@@ -32,7 +35,7 @@
 | 协作式主循环；空 MissionPort；STOP 覆盖七轴与舵机 | [main.c](../User/main.c)、[qr_app.c](../User/app/qr_app.c) |
 | 电机位置＋gyro，光流不参与底盘判断 | [chassis.c](../User/chassis/chassis.c)、[chassis_odometry.c](../User/chassis/chassis_odometry.c) |
 | 麦轮解算、100 mm/s、30°/s、20 ms 控制与 100 ms 发布 | [chassis_kinematics.c](../User/chassis/chassis_kinematics.c)、[chassis_config.h](../User/chassis/chassis_config.h) |
-| 默认 TRIAL；6→5→符合配置/反馈条件的 7；缺少 7 时 HOME 成功不等于三轴 HOMED | [mechanism.c](../User/mechanism/mechanism.c)、[mechanism_config.h](../User/mechanism/mechanism_config.h) |
+| 默认 TRIAL；七机就绪后 6→5→7 串行碰撞回零及停放，任一轴缺席不能成功 | [mechanism.c](../User/mechanism/mechanism.c)、[mechanism_config.h](../User/mechanism/mechanism_config.h) |
 | 双路 50 Hz PWM；三轴 HOMED 后自动启用；手动 ON 不复核 HOMED | [servo_control.c](../User/servo/servo_control.c)、[servo_pwm.c](../User/servo/servo_pwm.c)、[qr_app.c](../User/app/qr_app.c) |
 | CAL 与 ZERO 的电机门控不同；固定偏置不是实物校准证明 | [gyro_service.c](../User/gyro/gyro_service.c)、[gyro_config.h](../User/gyro/gyro_config.h)、[qr_app.c](../User/app/qr_app.c) |
 | 两批总计抓取 12 次/放置 12 次；扫码 15 s、其他单动作 90 s；无整场 180 s 时限 | [mission.c](../User/mission/mission.c)、[test_mission.c](../Tests/test_mission.c) |
